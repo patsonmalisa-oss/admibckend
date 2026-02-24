@@ -1914,4 +1914,5 @@ if __name__ == "__main__":
     print(f"Port: {port}")
     print(f"Backends: PyMuPDF={HAS_PYMUPDF}, pdfplumber={HAS_PDFPLUMBER}")
     print(f"{'='*60}\n")
-    app.run(host='0.0.0.0', port=port, debug=True)
+
+    app.run(host='0.0.0.0', port=5001, debug=True)
