@@ -1,0 +1,20 @@
+# Document Extraction Service Dependencies
+# Open Source PDF Processing - No LLM Required
+
+# PDF Processing
+PyMuPDF==1.24.8
+pdfplumber==0.11.0
+
+# Web Framework
+Flask==3.0.3
+flask-cors==5.0.0
+werkzeug==3.0.3
+
+# Data Validation (use pre-compiled version to avoid Rust dependency)
+pydantic==1.10.13
+
+# Multi-threading Support (built-in, no package needed)
+# concurrent.futures is part of Python standard library
+
+# Optional: Additional PDF backends
+# unstructured  # For complex layouts (requires additional system dependencies)
