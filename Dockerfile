@@ -44,7 +44,7 @@ RUN npm install
 # Copy Node.js backend files
 COPY main.js .
 COPY workflows/ ./workflows/
-COPY mockExtraction.js .
+
 
 # Expose Node.js service port
 EXPOSE 3001
@@ -93,4 +93,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:3001/ || exit 1
 
 # Start both services
+
 CMD ["sh", "-c", "python langextract_service.py & node main.js"]
