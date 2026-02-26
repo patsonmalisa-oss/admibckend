@@ -21,7 +21,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy Python service files
 COPY langextract_service.py .
-COPY temp_uploads/ ./temp_uploads/
 
 # Expose Python service port
 EXPOSE 5001
@@ -36,15 +35,13 @@ FROM node:18-alpine as node-backend
 WORKDIR /app/node-backend
 
 # Copy package files
-COPY package*.json ./
+COPY package.json ./
 
 # Install Node.js dependencies
 RUN npm install
 
 # Copy Node.js backend files
 COPY main.js .
-COPY workflows/ ./workflows/
-
 
 # Expose Node.js service port
 EXPOSE 3001
@@ -73,14 +70,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy Python service files
 COPY langextract_service.py .
-COPY temp_uploads/ ./temp_uploads/
 
 # Copy Node.js files
 COPY package*.json ./
 RUN npm install
 COPY main.js .
-COPY workflows/ ./workflows/
-COPY mockExtraction.js .
 
 # Create uploads directory
 RUN mkdir -p temp_uploads
@@ -95,3 +89,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # Start both services
 
 CMD ["sh", "-c", "python langextract_service.py & node main.js"]
+
