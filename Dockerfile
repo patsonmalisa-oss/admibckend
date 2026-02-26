@@ -29,10 +29,12 @@ EXPOSE 5001
 CMD ["python", "langextract_service.py"]
 
 # Stage 2: Node.js Backend
-FROM node:18-alpine as node-backend
+FROM node:20-slim as node-backend
 
 # Set working directory
 WORKDIR /app/node-backend
+
+WORKDIR /app
 
 # Copy package files
 COPY package.json ./
@@ -89,4 +91,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # Start both services
 
 CMD ["sh", "-c", "python langextract_service.py & node main.js"]
+
 
