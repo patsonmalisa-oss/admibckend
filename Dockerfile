@@ -21,7 +21,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy Python service files
 COPY langextract_service.py .
-COPY temp_uploads/ ./temp_uploads/
+COPY temp_uploads 
 
 # Expose Python service port
 EXPOSE 5001
@@ -43,7 +43,7 @@ RUN npm install
 
 # Copy Node.js backend files
 COPY main.js .
-COPY workflows/ ./workflows/
+COPY workflows
 
 # Expose Node.js service port
 EXPOSE 3001
@@ -78,7 +78,7 @@ COPY temp_uploads/ ./temp_uploads/
 COPY package.json ./
 RUN npm install
 COPY main.js .
-COPY workflows/ ./workflows/
+COPY workflows
 
 
 # Create uploads directory
@@ -94,4 +94,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # Start both services
 
 CMD ["sh", "-c", "python langextract_service.py & node main.js"]
+
 
