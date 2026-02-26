@@ -63,6 +63,13 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Inside your Stage 2 (the Python stage)
+COPY --from=node:20 /usr/local/bin/ /usr/local/bin/
+COPY --from=node:20 /usr/local/lib/ /usr/local/lib/
+
+# Now npm is available!
+RUN npm install    
     
 # Copy package files
 COPY package.json ./
@@ -99,6 +106,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # Start both services
 
 CMD ["sh", "-c", "python langextract_service.py & node main.js"]
+
 
 
 
