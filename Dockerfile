@@ -102,7 +102,8 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # Start both services
 
-CMD ["sh", "-c", "python langextract_service.py & node main.js"]
+CMD ["sh", "-c", "python langextract_service.py", "node", "main.js"]
+
 
 
 
