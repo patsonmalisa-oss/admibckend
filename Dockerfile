@@ -39,9 +39,6 @@ WORKDIR /app
 # Copy package files
 COPY package.json ./
 
-# Install Node.js dependencies
-RUN npm install
-
 # Copy Node.js backend files
 COPY main.js .
 
@@ -74,8 +71,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY langextract_service.py .
 
 # Copy Node.js files
-COPY package*.json ./
-RUN npm install
+COPY package.json ./
 COPY main.js .
 
 # Create uploads directory
@@ -91,5 +87,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # Start both services
 
 CMD ["sh", "-c", "python langextract_service.py & node main.js"]
+
 
 
