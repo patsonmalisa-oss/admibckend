@@ -66,7 +66,6 @@ RUN apt-get update && apt-get install -y \
 
 # Inside your Stage 2 (the Python stage)
 COPY --from=node:20 /usr/local/bin/ /usr/local/bin/
-COPY --from=node:20 /usr/local/lib/ /usr/local/lib/
 
 # Now npm is available!
 RUN npm install    
@@ -106,6 +105,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # Start both services
 
 CMD ["sh", "-c", "python langextract_service.py & node main.js"]
+
 
 
 
