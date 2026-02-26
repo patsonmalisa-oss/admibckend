@@ -1,0 +1,95 @@
+# Render.com Deployment Configuration
+# This file configures the deployment of the ADMI Backend to Render.com
+
+services:
+  # Main Backend Service
+  - type: web
+    name: admibackend
+    runtime: docker
+    env: docker
+    plan: free
+    region: oregon
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: PYTHON_SERVICE_HOST
+        value: localhost
+      - key: PYTHON_SERVICE_PORT
+        value: 5001
+      - key: JWT_SECRET
+        sync: false
+        fromService:
+          type: secret
+          name: JWT_SECRET
+      - key: DEEPSEEK_API_KEY
+        sync: false
+        fromService:
+          type: secret
+          name: DEEPSEEK_API_KEY
+      - key: DEEPSEEK_MODEL
+        value: deepseek-chat
+    buildCommand: |
+      # Build the Docker image
+      docker build -t admibackend .
+    startCommand: |
+      # Start the combined service
+      docker run -p 10000:3001 -p 5001:5001 admibackend
+    disk:
+      name: temp-storage
+      mountPath: /app/temp_uploads
+      sizeGB: 1
+
+  # Python Document Processing Service
+  - type: web
+    name: admipython
+    runtime: docker
+    env: docker
+    plan: free
+    region: oregon
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_SERVICE_HOST
+        value: 0.0.0.0
+      - key: PYTHON_SERVICE_PORT
+        value: 5001
+    buildCommand: |
+      # Build only the Python service
+      docker build --target python-service -t admipython .
+    startCommand: |
+      # Start the Python service
+      docker run -p 5001:5001 admipython
+    disk:
+      name: temp-storage
+      mountPath: /app/python-service/temp_uploads
+      sizeGB: 1
+
+# Background Workers (Optional)
+# - type: worker
+#   name: document-processor
+#   runtime: docker
+#   env: docker
+#   plan: free
+#   region: oregon
+#   envVars:
+#     - key: NODE_ENV
+#       value: production
+#   buildCommand: |
+#     docker build -t document-processor .
+#   startCommand: |
+#     docker run document-processor python process_queue.py
+
+# Databases (Optional - if you need persistent storage)
+# databases:
+#   - name: admidb
+#     plan: free
+#     region: oregon
+
+# Secrets (Set these in Render.com dashboard)
+# secrets:
+#   - name: JWT_SECRET
+#     description: JWT secret for authentication
+#   - name: DEEPSEEK_API_KEY
+#     description: DeepSeek API key for AI features

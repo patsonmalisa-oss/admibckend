@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  # Python Document Processing Service
+  python-service:
+    build:
+      context: .
+      target: python-service
+    ports:
+      - "5001:5001"
+    environment:
+      - PYTHON_SERVICE_HOST=0.0.0.0
+      - PYTHON_SERVICE_PORT=5001
+    volumes:
+      - ./temp_uploads:/app/python-service/temp_uploads
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Node.js Backend Service
+  node-backend:
+    build:
+      context: .
+      target: node-backend
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=development
+      - PYTHON_SERVICE_HOST=python-service
+      - PYTHON_SERVICE_PORT=5001
+      - JWT_SECRET=development-secret-key-change-in-production
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - DEEPSEEK_MODEL=deepseek-chat
+    volumes:
+      - ./temp_uploads:/app/node-backend/temp_uploads
+    depends_on:
+      python-service:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Nginx reverse proxy (optional, for production-like setup)
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - node-backend
+    restart: unless-stopped
+    profiles:
+      - production
+
+volumes:
+  temp_uploads:
+    driver: local
