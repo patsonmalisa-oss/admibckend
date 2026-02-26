@@ -41,11 +41,6 @@ RUN apt-get update && apt-get install -y \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy package files
-COPY package.json ./
-
-# Install Node.js dependencies
-RUN npm install
 
 # Copy Node.js backend files
 COPY main.js .
@@ -68,7 +63,12 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     curl \
     && rm -rf /var/lib/apt/lists/*
+    
+# Copy package files
+COPY package.json ./
 
+# Install Node.js dependencies
+RUN npm install
 # Set working directory
 WORKDIR /app
 
@@ -86,7 +86,6 @@ RUN npm install
 COPY main.js .
 COPY workflows/ .
 
-
 # Create uploads directory
 RUN mkdir -p temp_uploads
 
@@ -100,6 +99,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # Start both services
 
 CMD ["sh", "-c", "python langextract_service.py & node main.js"]
+
 
 
 
