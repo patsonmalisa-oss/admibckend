@@ -80,16 +80,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "https://admfront-p9ityvi2b-pmpanashe489-3815s-projects.vercel.app"}}),
-
-@app.route('/python/process', methods=['POST'])
-def process():
-    # Your logic here
-    return jsonify({"message": "Data processed successfully!"})
-
-if __name__ == '__main__':
-    app.run(debug=True)
+const BACKEND_URL = window.location.hostname === 'localhost' 
+        ? 'http://localhost:5001' 
+        : 'https://admibckend-1.onrender.com';
+    
+    // Since the Python app now handles /python/process directly:
+    const PYTHON_API = BACKEND_URL;
     
 # ============================================================
 # SECURITY IMPROVEMENTS
