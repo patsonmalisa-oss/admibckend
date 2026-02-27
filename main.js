@@ -125,7 +125,7 @@ const server = http.createServer((req, res) => {
     }
 
     // 2. Document Extraction (/api/documents/extract)
-    else if (reqUrl.pathname === '/api/documents/extract' && req.method === 'POST') {
+    else if (reqUrl.'https://admfront-git-main-pmpanashe489-3815s-projects.vercel.app' === '/api/documents/extract' && req.method === 'POST') {
         let body = '';
         req.on('data', chunk => body += chunk.toString());
         req.on('end', async () => {
@@ -220,7 +220,7 @@ const server = http.createServer((req, res) => {
     }
 
     // 4. Data Terminal (/api/terminal/execute)
-    else if (reqUrl.pathname === '/api/terminal/execute' && req.method === 'POST') {
+    else if (reqUrl.'https://admfront-git-main-pmpanashe489-3815s-projects.vercel.app' === '/api/terminal/execute' && req.method === 'POST') {
         let body = '';
         req.on('data', chunk => body += chunk.toString());
         req.on('end', () => {
