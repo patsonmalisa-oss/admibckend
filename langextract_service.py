@@ -80,10 +80,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
+app = Flask('https://admfront-five.vercel.app/ai-agent.html')
 # This enables CORS for all routes and origins
 CORS(app, resources={r"/*": {"origins": "https://admfront-bhnezy6zd-pmpanashe489-3815s-projects.vercel.app"}})
-
+if __name__ == 'https://admfront-five.vercel.app/ai-agent.html':
+    app.run(debug=True)
 # ============================================================
 # SECURITY IMPROVEMENTS
 # ============================================================
