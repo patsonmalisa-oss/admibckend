@@ -85,7 +85,11 @@ CORS(app, resources={r"/*": {"origins": "https://admfront-p9ityvi2b-pmpanashe489
 
 @app.route('/python/process', methods=['POST'])
 def process():
-    return {"status": "success"}
+    # Your logic here
+    return jsonify({"message": "Data processed successfully!"})
+
+if __name__ == '__main__':
+    app.run(debug=True)
     
 # ============================================================
 # SECURITY IMPROVEMENTS
