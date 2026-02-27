@@ -83,7 +83,13 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # Configure CORS with specific allowed origins
-CORS(app, resources={r"/*": {"origins": "https://admfront-p9ityvi2b-pmpanashe489-3815s-projects.vercel.app"}})
+CORS(app, resources={r"/*": {"origins": "https://admfront-p9ityvi2b-pmpanashe489-3815s-projects.vercel.app"}}),
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://admfront-p9ityvi2b-pmpanashe489-3815s-projects.vercel.app"], # For production, replace "*" with your specific Vercel URL
+    allow_methods=["https://admfront-p9ityvi2b-pmpanashe489-3815s-projects.vercel.app"],
+    allow_headers=["https://admfront-p9ityvi2b-pmpanashe489-3815s-projects.vercel.app"],
 
 # ============================================================
 # SECURITY IMPROVEMENTS
