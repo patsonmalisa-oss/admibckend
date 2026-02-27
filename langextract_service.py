@@ -81,16 +81,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-
-# Configure CORS with specific allowed origins
-CORS(app, resources={
-    r"/*": {
-        "origins": CORS_ORIGINS,
-        "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
-        "supports_credentials": True
-    }
-})
+# This enables CORS for all routes and origins
+CORS(app, resources={r"/*": {"origins": "https://admfront-bhnezy6zd-pmpanashe489-3815s-projects.vercel.app"}})
 
 # ============================================================
 # SECURITY IMPROVEMENTS
