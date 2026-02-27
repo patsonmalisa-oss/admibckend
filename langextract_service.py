@@ -86,6 +86,17 @@ const BACKEND_URL = window.location.hostname === 'localhost'
     
     // Since the Python app now handles /python/process directly:
     const PYTHON_API = BACKEND_URL;
+
+# ... (around line 80)
+app = Flask(__name__)
+
+# Fix: Ensure no trailing comma and no JS code here
+CORS(app, resources={r"/*": {"origins": "*"}}) 
+
+@app.route('/python/process', methods=['POST'])
+def process():
+    # Your logic here
+    return jsonify({"success": True, "message": "Connected to Python!"})
     
 # ============================================================
 # SECURITY IMPROVEMENTS
