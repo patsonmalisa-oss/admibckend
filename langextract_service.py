@@ -83,6 +83,10 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "https://admfront-p9ityvi2b-pmpanashe489-3815s-projects.vercel.app"}}),
 
+@app.route('/python/process', methods=['POST'])
+def process():
+    return {"status": "success"}
+    
 # ============================================================
 # SECURITY IMPROVEMENTS
 # ============================================================
