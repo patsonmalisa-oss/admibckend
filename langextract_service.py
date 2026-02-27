@@ -120,7 +120,7 @@ def process_extraction(): # Renamed to avoid confusion with internal 'process'
         return jsonify({"success": False, "error": str(e)}), 500
 
 # ... (around line 80)
-const BACKEND_URL = window.location.hostname === 'localhost' 
+const BACKEND_URL = 'https://admibckend-1.onrender.com' === 'localhost' 
     ? 'http://localhost:5001'  // Matches the Python PORT in langextract_service.py
     : 'https://admibckend-1.onrender.com';
 
