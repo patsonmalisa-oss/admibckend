@@ -84,16 +84,31 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # FIX: Removed the trailing comma and JS code
+app = Flask(__name__)
+
+# FIX: Removed the trailing comma that caused the AttributeError
 CORS(app, resources={r"/*": {"origins": "*"}}) 
 
+# Ensure the route matches the frontend call
 @app.route('/python/process', methods=['POST'])
-def process_document():
+def process_extraction(): # Renamed to avoid confusion with internal 'process'
     try:
         if 'file' not in request.files:
-            return jsonify({"success": false, "error": "No file"}), 400
-            
+            return jsonify({"success": False, "error": "No file uploaded"}), 400
+        
         file = request.files['file']
-        prompt = request.form.get('prompt', 'Extract data')
+        prompt = request.form.get('prompt', '')
+        
+        # This is where your AI extraction logic goes
+        return jsonify({
+            "success": True, 
+            "extractions": [{"date": "2025-01-01", "entity": "ADMI", "amount": 0.0}],
+            "headers": ["date", "entity", "amount"],
+            "metadata": {"filename": file.filename}
+        })
+    except Exception as e:
+        logger.error(f"Process error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
         
         # This is where your extraction logic goes
         return jsonify({
