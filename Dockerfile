@@ -45,6 +45,7 @@ RUN apt-get update && apt-get install -y \
 # Copy Node.js backend files
 COPY main.js .
 COPY workflows/ .
+COPY mockExtraction.js .
 
 # Expose Node.js service port
 EXPOSE 3001
@@ -89,6 +90,7 @@ COPY package.json ./
 RUN npm install
 COPY main.js .
 COPY workflows/ .
+COPY mockExtraction.js .
 
 # Create uploads directory
 RUN mkdir -p temp_uploads
@@ -103,6 +105,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # Start both services
 
 CMD ["sh", "-c", "python langextract_service.py", "node", "main.js"]
+
 
 
 
