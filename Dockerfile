@@ -92,10 +92,22 @@ COPY main.js .
 COPY workflows/ .
 COPY mockExtraction.js .
 
-# Create uploads directory
-RUN mkdir -p temp_uploads
+# 1. Create a group and user with GID/UID 1000
+RUN groupadd -g 1000 appuser && \
+    useradd -u 1000 -g appuser -m appuser
 
-# Expose ports
+# Set working directory
+WORKDIR /app
+
+# ... (keep your COPY and pip install commands) ...
+
+# 2. Ensure the uploads directory exists and is owned by the new user
+RUN mkdir -p temp_uploads && chown -R appuser:appuser /app
+
+# 3. Switch to the non-root user for security and to satisfy getgrgid()
+USER appuser
+
+# Expose ports and Start services
 EXPOSE 3001 5001
 
 # Health check
@@ -104,7 +116,8 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # Start both services
 
-CMD ["sh", "-c", "python langextract_service.py", "node", "main.js"]
+CMD ["sh", "-c", "python langextract_service.py & node main.js"]
+
 
 
 
