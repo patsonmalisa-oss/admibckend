@@ -80,23 +80,36 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-const BACKEND_URL = window.location.hostname === 'localhost' 
-        ? 'http://localhost:5001' 
-        : 'https://admibckend-1.onrender.com';
-    
-    // Since the Python app now handles /python/process directly:
-    const PYTHON_API = BACKEND_URL;
-
-# ... (around line 80)
+# --- Python Code ---
 app = Flask(__name__)
 
-# Fix: Ensure no trailing comma and no JS code here
+# FIX: Removed the trailing comma and JS code
 CORS(app, resources={r"/*": {"origins": "*"}}) 
 
 @app.route('/python/process', methods=['POST'])
-def process():
-    # Your logic here
-    return jsonify({"success": True, "message": "Connected to Python!"})
+def process_document():
+    try:
+        if 'file' not in request.files:
+            return jsonify({"success": false, "error": "No file"}), 400
+            
+        file = request.files['file']
+        prompt = request.form.get('prompt', 'Extract data')
+        
+        # This is where your extraction logic goes
+        return jsonify({
+            "success": True,
+            "extractions": [{"entity": "Sample", "date": "2025-01-01", "amount": 0.0}],
+            "headers": ["entity", "date", "amount"]
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# ... (around line 80)
+const BACKEND_URL = window.location.hostname === 'localhost' 
+    ? 'http://localhost:5001'  // Matches the Python PORT in langextract_service.py
+    : 'https://admibckend-1.onrender.com';
+
+const PYTHON_API = BACKEND_URL;
     
 # ============================================================
 # SECURITY IMPROVEMENTS
