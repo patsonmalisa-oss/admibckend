@@ -92,49 +92,33 @@ if __name__ == 'https://admfront-five.vercel.app/ai-agent.html':
     app.run(debug=True)
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": CORS_ORIGINS}})
-try:
-        # Check for file and prompt in the request
-        if 'file' not in request.files:
-            return jsonify({"success": False, "error": "No file uploaded"}), 400
-        
-        file = request.files['file']
-        prompt = request.form.get('prompt', '')
-        
-        # Placeholder for extraction logic
-        # You would call your PromptAnalyzer and PDF processing here
-        
-        return jsonify({
-            "success": True,
-            "extractions": [{"entity": "Sample", "date": "2023-01-01", "amount": 100.0}],
-            "headers": ["entity", "date", "amount"]
-        })
-    except Exception as e:
-        logger.error(f"Process error: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+# Enable CORS for your specific Vercel production and preview domains
+CORS(app, resources={r"/*": {
+    "origins": [
+        "https://admfront-five.vercel.app",
+        "https://admfront-bhnezy6zd-pmpanashe489-3815s-projects.vercel.app"
+    ]
+}})
 
 # ============================================================
 # SECURITY IMPROVEMENTS
 # ============================================================
 
-# Create a non-root user for security
-USER_ID = 1000
-GROUP_ID = 1000
-
 def create_user():
     """Create a non-root user for running the service."""
+    USER_ID = 1000
+    GROUP_ID = 1000
     try:
         import pwd
         import grp
         try:
             pwd.getpwnam('appuser')
         except KeyError:
-            # Create user and group
-            group = grp.getgrgid(GROUP_ID)
-            user = pwd.getpwnam(USER_ID)
-            os.setgid(GROUP_ID)
-            os.setuid(USER_ID)
-            logger.info(f"Running service as user {USER_ID}:{GROUP_ID}")
+            # Note: Changing IDs requires root privileges, 
+            # usually handled in Dockerfile, not at runtime script level
+            # os.setgid(GROUP_ID)
+            # os.setuid(USER_ID)
+            logger.info(f"User check completed.")
     except Exception as e:
         logger.warning(f"Could not set user permissions: {e}")
 
