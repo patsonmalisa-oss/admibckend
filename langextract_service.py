@@ -65,7 +65,12 @@ PORT = int(os.environ.get("PYTHON_PORT", 5001))
 HOST = os.environ.get("PYTHON_HOST", "0.0.0.0")
 UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", os.path.join(os.getcwd(), 'temp_uploads'))
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
-CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "https://admfront-ibzanzy6u-pmpanashe489-3815s-projects.vercel.app,https://admfront-five.vercel.app,http://localhost:3000,http://localhost:3001").split(',')
+CORS_ORIGINS = [
+    "https://admfront-five.vercel.app",
+    "https://admfront-bhnezy6zd-pmpanashe489-3815s-projects.vercel.app",
+    "http://localhost:3000",
+    "http://localhost:3001"
+]
 
 # Create upload folder if it doesn't exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -85,6 +90,29 @@ app = Flask('https://admfront-five.vercel.app/ai-agent.html')
 CORS(app, resources={r"/*": {"origins": "https://admfront-bhnezy6zd-pmpanashe489-3815s-projects.vercel.app"}})
 if __name__ == 'https://admfront-five.vercel.app/ai-agent.html':
     app.run(debug=True)
+
+app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": CORS_ORIGINS}})
+try:
+        # Check for file and prompt in the request
+        if 'file' not in request.files:
+            return jsonify({"success": False, "error": "No file uploaded"}), 400
+        
+        file = request.files['file']
+        prompt = request.form.get('prompt', '')
+        
+        # Placeholder for extraction logic
+        # You would call your PromptAnalyzer and PDF processing here
+        
+        return jsonify({
+            "success": True,
+            "extractions": [{"entity": "Sample", "date": "2023-01-01", "amount": 100.0}],
+            "headers": ["entity", "date", "amount"]
+        })
+    except Exception as e:
+        logger.error(f"Process error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
 # ============================================================
 # SECURITY IMPROVEMENTS
 # ============================================================
