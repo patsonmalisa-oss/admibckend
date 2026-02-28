@@ -455,6 +455,10 @@ def process_document():
         logger.error(f"Process error: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
+@app.route('/')
+def index():
+    return "", 200
+
 
 # ============================================================
 # MAIN
