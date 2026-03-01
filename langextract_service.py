@@ -600,6 +600,19 @@ def extract_csv_content(file_path: str) -> List[Dict[str, Any]]:
         logger.error(f"CSV extraction failed: {e}")
     return data
 
+def extract_excel_content(file_path: str) -> List[Dict[str, Any]]:
+    """Extract content from Excel file."""
+    data = []
+    if HAS_PANDAS:
+        try:
+            df = pd.read_excel(file_path)
+            # Replace NaN with None or empty string
+            df = df.where(pd.notnull(df), None)
+            data = df.to_dict(orient='records')
+        except Exception as e:
+            logger.error(f"Excel extraction failed: {e}")
+    return data
+
 def process_with_analysis(file_path: str, analysis: PromptAnalysis) -> List[Dict[str, Any]]:
     """Process document based on prompt analysis."""
     ext = os.path.splitext(file_path)[1].lower()
@@ -607,6 +620,15 @@ def process_with_analysis(file_path: str, analysis: PromptAnalysis) -> List[Dict
     if ext == '.csv':
         # For CSV, we just return the data, maybe filtered by columns
         data = extract_csv_content(file_path)
+        if HAS_PANDAS:
+            analyst = PandasDataAnalyst(data)
+            analyst.clean_data()
+            return analyst.structure_table(analysis.columns)
+        return data
+    
+    elif ext in ['.xlsx', '.xls']:
+        # For Excel
+        data = extract_excel_content(file_path)
         if HAS_PANDAS:
             analyst = PandasDataAnalyst(data)
             analyst.clean_data()
@@ -731,40 +753,41 @@ def process_with_analysis(file_path: str, analysis: PromptAnalysis) -> List[Dict
 # API ROUTES
 # ============================================================
 
+@app.route('/', methods=['GET'])
+def root():
+    """Root endpoint for health checks."""
+    return jsonify({"status": "ok", "service": "LangExtract"})
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """Enhanced health check with system information."""
+    system_info = {
+        'status': 'healthy',
+        'timestamp': datetime.now().isoformat(),
+        'backends': {
+            'pymupdf': HAS_PYMUPDF,
+            'pdfplumber': HAS_PDFPLUMBER,
+            'pandas': HAS_PANDAS
+        },
+        'mode': 'enhanced_prompt_classification'
+    }
+    
     try:
         import psutil
         memory_info = psutil.virtual_memory()
         cpu_info = psutil.cpu_percent(interval=1)
-        system_info = {
-            'status': 'healthy',
-            'timestamp': datetime.now().isoformat(),
-            'backends': {
-                'pymupdf': HAS_PYMUPDF,
-                'pdfplumber': HAS_PDFPLUMBER,
-                'pandas': HAS_PANDAS
-            },
-            'mode': 'enhanced_prompt_classification',
-            'system': {
-                'memory_percent': memory_info.percent,
-                'cpu_percent': cpu_info,
-                'uptime': datetime.now().timestamp() - psutil.boot_time()
-            }
+        system_info['system'] = {
+            'memory_percent': memory_info.percent,
+            'cpu_percent': cpu_info,
+            'uptime': datetime.now().timestamp() - psutil.boot_time()
         }
-        return jsonify(system_info)
+    except ImportError:
+        system_info['system'] = 'psutil not available'
     except Exception as e:
-        logger.error(f"Health check error: {e}")
-        return jsonify({
-            'status': 'degraded',
-            'timestamp': datetime.now().isoformat(),
-            'backends': {
-                'pymupdf': HAS_PYMUPDF,
-                'pdfplumber': HAS_PDFPLUMBER
-            },
-            'error': str(e)
-        }), 503
+        logger.error(f"System info error: {e}")
+        system_info['system_error'] = str(e)
+        
+    return jsonify(system_info)
 
 
 @app.route('/process', methods=['POST'])
