@@ -40,7 +40,7 @@ WORKDIR /app/node-backend
 COPY package.json ./
 
 # Install Node.js dependencies
-RUN npm install
+RUN npm install --no-optional
 
 # Copy Node.js backend files
 COPY main.js .
@@ -54,17 +54,22 @@ EXPOSE 3001
 # Stage 3: Combined Service (Production)
 FROM python:3.11-slim
 
-# Install system dependencies
+# Install system dependencies and Node.js 18
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     libffi-dev \
     libssl-dev \
     curl \
-    nodejs \
-    npm \
     libjpeg-dev \
     zlib1g-dev \
+    ca-certificates \
+    gnupg \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_18.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update \
+    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -81,7 +86,7 @@ RUN mkdir -p temp_uploads
 
 # Copy Node.js files
 COPY package.json .
-RUN npm install
+RUN npm install --no-optional
 COPY main.js .
 COPY workflows/ ./workflows/
 COPY mockExtraction.js .
