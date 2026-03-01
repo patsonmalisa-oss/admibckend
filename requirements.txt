@@ -12,6 +12,9 @@ Flask==3.0.3
 flask-cors==5.0.0
 werkzeug==3.0.3
 
+# Data Validation (use pre-compiled version to avoid Rust dependency)
+pydantic==1.10.13
+
 # System Utilities
 psutil==5.9.8
 
