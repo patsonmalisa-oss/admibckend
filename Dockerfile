@@ -20,7 +20,6 @@ COPY requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
-RUN apt-get update && apt-get install -y --fix-missing nodejs
 
 # Copy Python service files
 COPY langextract_service.py .
@@ -95,5 +94,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # We use main.js as the entry point for Node.js as it includes the full backend logic
 
 CMD ["sh", "-c", "python langextract_service.py & node main.js"]
+
 
 
