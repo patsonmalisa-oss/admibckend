@@ -2,7 +2,7 @@
 // Open a terminal in the project root directory and run:
 // npm install busboy bcryptjs jsonwebtoken
 // node workflows/main.js
-// The server will start on https://admfront-five.vercel.app/ai-agent.html.
+// The server will start on http://localhost:3000.
 
 const http = require('http');
 const https = require('https');
@@ -31,7 +31,7 @@ const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || "";
 const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || "deepseek-chat";
 const PYTHON_SERVICE_HOST = process.env.PYTHON_SERVICE_HOST || 'localhost';
 const PYTHON_SERVICE_PORT = process.env.PYTHON_SERVICE_PORT || 5001;
-const PYTHON_SERVICE_URL = `https://admfront-five.vercel.app/ai-agent.html/process`;
+const PYTHON_SERVICE_URL = `http://${PYTHON_SERVICE_HOST}:${PYTHON_SERVICE_PORT}/process`;
 
 // Validate required environment variables
 if (!process.env.JWT_SECRET && process.env.NODE_ENV === 'production') {
@@ -42,24 +42,24 @@ if (!DEEPSEEK_API_KEY && process.env.NODE_ENV === 'production') {
 }
 
 const server = http.createServer((req, res) => {
-    const reqUrl = new URL(req.url, `https://admfront-five.vercel.app/ai-agent.html`);
+    const reqUrl = new URL(req.url, `http://${req.headers.host}`);
 
     // Allow specific frontend domains for better security
-    const allowedOrigins = [
-        'https://admfront-ibzanzy6u-pmpanashe489-3815s-projects.vercel.app',
-        'https://admfront-caftyv63x-pmpanashe489-3815s-projects.vercel.app',
-        'https://admfront-five.vercel.app',
-        'https://admfront-five.vercel.app/ai-agent.html',
-        'http://localhost:3000',
-        'http://localhost:3001'
-    ];
-    
     const origin = req.headers.origin;
-    if (allowedOrigins.includes(origin)) {
+
+    // Allow all Vercel deployments and localhost
+    let isAllowed = false;
+    if (!origin) {
+        isAllowed = true;
+    } else if (origin.endsWith('.vercel.app') || origin.includes('localhost')) {
+        isAllowed = true;
+    }
+
+    if (isAllowed && origin) {
         res.setHeader('Access-Control-Allow-Origin', origin);
-    } else {
-        // For development or other trusted origins
-        // res.setHeader('Access-Control-Allow-Origin', '*');
+    } else if (origin) {
+        // Optional: Log blocked origins for debugging
+        console.log(`Blocked CORS request from: ${origin}`);
     }
     
     res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS, PUT, DELETE');
