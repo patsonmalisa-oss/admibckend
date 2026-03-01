@@ -1,12 +1,4 @@
 {
-  "name": "admi-backend",
-  "version": "1.0.0", 
-  "description": "ADMI Backend Server",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  }
-},
   "dependencies": {
     "busboy": "^1.2.7",
     "bcryptjs": "^2.4.3",
@@ -19,5 +11,6 @@
 "repository":"https://github.com/patsonmalisa-oss/admibckend",
 
 }
+
 
 
