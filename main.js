@@ -49,6 +49,7 @@ const server = http.createServer((req, res) => {
         'https://admfront-ibzanzy6u-pmpanashe489-3815s-projects.vercel.app',
         'https://admfront-caftyv63x-pmpanashe489-3815s-projects.vercel.app',
         'https://admfront-five.vercel.app',
+        'https://admfront-five.vercel.app/ai-agent.html',
         'http://localhost:3000',
         'http://localhost:3001'
     ];
