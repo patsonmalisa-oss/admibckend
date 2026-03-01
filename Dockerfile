@@ -1,5 +1,4 @@
 # Multi-stage Dockerfile for ADMI Backend
-ENV PIP_ROOT_USER_ACTION=ignore
 
 # Stage 1: Python Service (LangExtract)
 FROM python:3.11-slim as python-service
@@ -95,3 +94,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # We use main.js as the entry point for Node.js as it includes the full backend logic
 
 CMD ["sh", "-c", "python langextract_service.py & node main.js"]
+
