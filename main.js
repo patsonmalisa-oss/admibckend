@@ -47,6 +47,7 @@ const server = http.createServer((req, res) => {
     // Allow specific frontend domains for better security
     const allowedOrigins = [
         'https://admfront-ibzanzy6u-pmpanashe489-3815s-projects.vercel.app',
+        'https://admfront-caftyv63x-pmpanashe489-3815s-projects.vercel.app',
         'https://admfront-five.vercel.app',
         'http://localhost:3000',
         'http://localhost:3001'
@@ -57,7 +58,7 @@ const server = http.createServer((req, res) => {
         res.setHeader('Access-Control-Allow-Origin', origin);
     } else {
         // For development or other trusted origins
-        res.setHeader('Access-Control-Allow-Origin', '*');
+        // res.setHeader('Access-Control-Allow-Origin', '*');
     }
     
     res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS, PUT, DELETE');
