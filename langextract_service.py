@@ -64,7 +64,6 @@ PORT = int(os.environ.get("PYTHON_PORT", 5001))
 HOST = os.environ.get("PYTHON_HOST", "0.0.0.0")
 UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", os.path.join(os.getcwd(), 'temp_uploads'))
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
-CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "https://admfront-ibzanzy6u-pmpanashe489-3815s-projects.vercel.app,https://admfront-caftyv63x-pmpanashe489-3815s-projects.vercel.app,https://admfront-five.vercel.app,https://admfront-five.vercel.app/ai-agent.html,http://localhost:3000,http://localhost:3001").split(',')
 
 # Create upload folder if it doesn't exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -81,10 +80,13 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Configure CORS with specific allowed origins
+# Configure CORS to allow all Vercel subdomains and localhost
 CORS(app, resources={
     r"/*": {
-        "origins": CORS_ORIGINS,
+        "origins": [
+            r"^https://.*\.vercel\.app$",
+            r"^http://localhost:\d+$"
+        ],
         "methods": ["GET", "POST", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
         "supports_credentials": True
