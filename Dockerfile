@@ -6,9 +6,6 @@ FROM python:3.11-slim as python-service
 # Set working directory
 WORKDIR /app/python-service
 
-# Silence pip warnings
-ENV PIP_ROOT_USER_ACTION=ignore
-
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     gcc \
@@ -32,13 +29,13 @@ COPY temp_uploads/ ./temp_uploads/
 EXPOSE 5001
 
 # Stage 2: Node.js Backend
-FROM node:20-alpine as node-backend
+FROM node:18-alpine as node-backend
 
 # Set working directory
 WORKDIR /app/node-backend
 
 # Copy package files
-COPY package*.json ./
+COPY package.json ./
 
 # Install Node.js dependencies
 RUN npm install
@@ -79,7 +76,7 @@ COPY langextract_service.py .
 RUN mkdir -p temp_uploads
 
 # Copy Node.js files
-COPY package*.json ./
+COPY package.json .
 RUN npm install
 COPY main.js .
 COPY workflows/ ./workflows/
@@ -94,11 +91,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:3001/ || exit 1
 
 # Start both services
-# We use main.js as the entry point for Node.js as it includes the full backend logic
-
-CMD ["sh", "-c", "python langextract_service.py & node main.js"]
-
-
-
-
-
+# We use server.js as the entry point for Node.js as it includes the proxy logic
+CMD ["sh", "-c", "python langextract_service.py & node server.js"]
