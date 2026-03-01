@@ -55,10 +55,10 @@ const server = http.createServer((req, res) => {
         isAllowed = true;
     }
 
+    // Set CORS headers
     if (isAllowed && origin) {
         res.setHeader('Access-Control-Allow-Origin', origin);
     } else if (origin) {
-        // Optional: Log blocked origins for debugging
         console.log(`Blocked CORS request from: ${origin}`);
     }
     
@@ -66,6 +66,7 @@ const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
 
+    // Handle preflight requests
     if (req.method === 'OPTIONS') {
         res.writeHead(204);
         res.end();
@@ -592,6 +593,12 @@ const server = http.createServer((req, res) => {
         delete options.headers.referer;
 
         const proxyReq = http.request(options, (proxyRes) => {
+            // Remove CORS headers from proxy response to avoid duplicates
+            delete proxyRes.headers['access-control-allow-origin'];
+            delete proxyRes.headers['access-control-allow-methods'];
+            delete proxyRes.headers['access-control-allow-headers'];
+            delete proxyRes.headers['access-control-allow-credentials'];
+
             res.writeHead(proxyRes.statusCode, proxyRes.headers);
             proxyRes.pipe(res, { end: true });
         });
