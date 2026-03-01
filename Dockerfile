@@ -6,6 +6,9 @@ FROM python:3.11-slim as python-service
 # Set working directory
 WORKDIR /app/python-service
 
+# Silence pip warnings
+ENV PIP_ROOT_USER_ACTION=ignore
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     gcc \
@@ -94,6 +97,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # We use main.js as the entry point for Node.js as it includes the full backend logic
 
 CMD ["sh", "-c", "python langextract_service.py & node main.js"]
+
 
 
 
