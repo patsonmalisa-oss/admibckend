@@ -91,5 +91,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:3001/ || exit 1
 
 # Start both services
-# We use server.js as the entry point for Node.js as it includes the proxy logic
-CMD ["sh", "-c", "python langextract_service.py & node server.js"]
+# We use main.js as the entry point for Node.js as it includes the full backend logic
+CMD ["sh", "-c", "python langextract_service.py & node main.js"]
