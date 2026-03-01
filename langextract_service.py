@@ -392,50 +392,107 @@ class PromptAnalyzer:
         return constraints
 
 # ============================================================
-# MOCK EXTRACTION LOGIC (For demonstration)
+# DOCUMENT PROCESSING LOGIC
 # ============================================================
 
-def mock_extract(file_path: str, prompt: str) -> Dict[str, Any]:
-    """
-    Mock extraction function to simulate processing.
-    In a real implementation, this would use PyMuPDF/pdfplumber and LLMs.
-    """
-    analyzer = PromptAnalyzer()
-    analysis = analyzer.analyze(prompt)
+def extract_pdf_content(file_path: str) -> str:
+    """Extract text content from PDF using PyMuPDF."""
+    text_content = []
+    if HAS_PYMUPDF:
+        try:
+            doc = fitz.open(file_path)
+            for page in doc:
+                text_content.append(page.get_text())
+            doc.close()
+            return "\n".join(text_content)
+        except Exception as e:
+            logger.error(f"PyMuPDF extraction failed: {e}")
+    
+    # Fallback to pdfplumber if PyMuPDF fails or is unavailable
+    if HAS_PDFPLUMBER:
+        try:
+            with pdfplumber.open(file_path) as pdf:
+                for page in pdf.pages:
+                    text = page.extract_text()
+                    if text:
+                        text_content.append(text)
+            return "\n".join(text_content)
+        except Exception as e:
+            logger.error(f"pdfplumber extraction failed: {e}")
+            
+    return ""
 
-    # Simulate extraction based on analysis
-    columns = analysis.columns
-    if not columns:
-        columns = ['Field', 'Value']
+def extract_csv_content(file_path: str) -> List[Dict[str, Any]]:
+    """Extract content from CSV file."""
+    data = []
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                data.append(row)
+    except Exception as e:
+        logger.error(f"CSV extraction failed: {e}")
+    return data
 
-    # Generate mock data
-    extractions = []
-    for i in range(5):
-        row = {}
-        for col in columns:
-            if 'date' in col.lower():
-                row[col] = f"2023-01-{10+i}"
-            elif 'amount' in col.lower() or 'price' in col.lower():
-                row[col] = f"${100 * (i+1)}.00"
-            elif 'name' in col.lower() or 'author' in col.lower():
-                row[col] = f"Person {i+1}"
-            else:
-                row[col] = f"Sample Data {i+1}"
-        extractions.append(row)
-
-    return {
-        "success": True,
-        "extractions": extractions,
-        "headers": columns,
-        "metadata": {
-            "prompt_analysis": {
-                "type": analysis.extraction_type.value,
-                "section": analysis.section_type.value if analysis.section_type else None,
-                "keywords": analysis.keywords
-            },
-            "file": os.path.basename(file_path)
-        }
-    }
+def process_with_analysis(file_path: str, analysis: PromptAnalysis) -> List[Dict[str, Any]]:
+    """Process document based on prompt analysis."""
+    ext = os.path.splitext(file_path)[1].lower()
+    
+    if ext == '.csv':
+        # For CSV, we just return the data, maybe filtered by columns
+        data = extract_csv_content(file_path)
+        if analysis.columns and analysis.columns != ['Item', 'Description', 'Value']:
+            # Filter columns if specific ones requested
+            filtered_data = []
+            for row in data:
+                filtered_row = {k: v for k, v in row.items() if k in analysis.columns}
+                if filtered_row:
+                    filtered_data.append(filtered_row)
+            return filtered_data
+        return data
+        
+    elif ext == '.pdf':
+        text = extract_pdf_content(file_path)
+        
+        # Simple regex-based extraction based on columns
+        # In a real scenario, this would use an LLM or more complex NLP
+        results = []
+        
+        # If looking for specific patterns like emails or dates
+        if ExtractionType.CONTACTS in [analysis.extraction_type]:
+            emails = re.findall(r'[\w\.-]+@[\w\.-]+\.\w+', text)
+            for email in emails:
+                results.append({"Email": email})
+                
+        elif ExtractionType.TIMELINE in [analysis.extraction_type]:
+            dates = re.findall(r'\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}', text)
+            for date in dates:
+                results.append({"Date": date})
+                
+        else:
+            # Generic extraction - just return lines that might contain keywords
+            lines = text.split('\n')
+            for line in lines:
+                row = {}
+                include = False
+                for col in analysis.columns:
+                    if col.lower() in line.lower():
+                        row[col] = line.strip()
+                        include = True
+                
+                if not include and analysis.keywords:
+                    for kw in analysis.keywords:
+                        if kw.lower() in line.lower():
+                            row["Content"] = line.strip()
+                            include = True
+                            break
+                            
+                if include:
+                    results.append(row)
+                    
+        return results
+        
+    return []
 
 # ============================================================
 # API ROUTES
@@ -501,9 +558,26 @@ def process_document():
             file.save(filepath)
 
             try:
+                # Analyze prompt
+                analyzer = PromptAnalyzer()
+                analysis = analyzer.analyze(prompt)
+                
                 # Process the file
-                result = mock_extract(filepath, prompt)
-                return jsonify(result)
+                extractions = process_with_analysis(filepath, analysis)
+                
+                return jsonify({
+                    "success": True,
+                    "extractions": extractions,
+                    "headers": analysis.columns if extractions else [],
+                    "metadata": {
+                        "prompt_analysis": {
+                            "type": analysis.extraction_type.value,
+                            "section": analysis.section_type.value if analysis.section_type else None,
+                            "keywords": analysis.keywords
+                        },
+                        "file": filename
+                    }
+                })
             finally:
                 # Clean up
                 if os.path.exists(filepath):
