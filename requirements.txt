@@ -5,6 +5,7 @@
 PyMuPDF==1.24.8
 pdfplumber==0.11.0
 pdfminer.six==20231228
+docling==1.0.0
 
 # Web Framework
 Flask==3.0.3
