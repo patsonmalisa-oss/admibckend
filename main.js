@@ -42,7 +42,7 @@ if (!DEEPSEEK_API_KEY && process.env.NODE_ENV === 'production') {
 }
 
 const server = http.createServer((req, res) => {
-    const reqUrl = new URL(req.url, `http://${req.headers.host}`);
+    const reqUrl = new URL(req.url, `https://admfront-five.vercel.app/ai-agent.html`);
 
     // Allow specific frontend domains for better security
     const allowedOrigins = [
