@@ -29,7 +29,8 @@ const sessionFiles = [];
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-key-change-this-in-render';
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || "";
 const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || "deepseek-chat";
-const PYTHON_SERVICE_HOST = process.env.PYTHON_SERVICE_HOST || 'localhost';
+// Use 127.0.0.1 to avoid IPv6 resolution issues
+const PYTHON_SERVICE_HOST = process.env.PYTHON_SERVICE_HOST || '127.0.0.1';
 const PYTHON_SERVICE_PORT = process.env.PYTHON_SERVICE_PORT || 5001;
 const PYTHON_SERVICE_URL = `http://${PYTHON_SERVICE_HOST}:${PYTHON_SERVICE_PORT}/process`;
 
