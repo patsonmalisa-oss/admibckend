@@ -157,7 +157,13 @@ const server = http.createServer((req, res) => {
                 // Create FormData for the Python service
                 const formData = new FormData();
                 formData.append('file', buffer, { filename: safeFilename, contentType: 'application/pdf' });
-                formData.append('prompt', prompt);
+
+                // Enrich prompt if it's about references
+                const enrichedPrompt = prompt.toLowerCase().includes('references')
+                    ? `${prompt}. Format example: Author, Title, Date, Institution. Example entry: Chigumadzi, P., These Bones Will Rise Again, 2018, Jacana.`
+                    : prompt;
+
+                formData.append('prompt', enrichedPrompt);
 
                 try {
                     // Make HTTP request to Python LangExtract service
