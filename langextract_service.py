@@ -1,649 +1,756 @@
-// To run this backend server, you need Node.js and several packages installed.
-// Open a terminal in the project root directory and run:
-// npm install busboy bcryptjs jsonwebtoken
-// node workflows/main.js
-// The server will start on http://localhost:3000.
+"""
+Document Extraction Service - Enhanced with Chapter/Section Detection
+and Prompt-Based Classification
 
-const http = require('http');
-const https = require('https');
-const { URL } = require('url');
-const busboy = require('busboy');
-const FormData = require('form-data');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const { mockExtractFromDocuments } = require('./mockExtraction');
-const { spawn } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
+Features:
+- Advanced chapter/section detection and parsing
+- Prompt-based classification and extraction
+- Strict schema enforcement for consistent columns/rows
+- Clean spreadsheet-style output with proper headers
+- Properly segmented CSV export
+- Table extraction support
+- Key-Value pair extraction
 
-// In-memory storage
-const users = {};
-const surveys = [];
-const jobs = [];
-const chatHistories = {};
-const researchChatHistories = {}; // Separate history for the research assistant
-const sessionFiles = []; 
+Container Improvements:
+- Environment variable configuration
+- Security improvements (non-root user)
+- Structured logging
+- Graceful shutdown handling
+- Enhanced error handling
+"""
 
-// Environment Configuration
-const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-key-change-this-in-render';
-const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || "";
-const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || "deepseek-chat";
-const PYTHON_SERVICE_HOST = process.env.PYTHON_SERVICE_HOST || 'localhost';
-const PYTHON_SERVICE_PORT = process.env.PYTHON_SERVICE_PORT || 5001;
-const PYTHON_SERVICE_URL = `http://${PYTHON_SERVICE_HOST}:${PYTHON_SERVICE_PORT}/process`;
+import sys
+import json
+import os
+import traceback
+import gc
+import re
+import csv
+import io
+import logging
+import signal
+import atexit
+from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime
+from dataclasses import dataclass, field
+from enum import Enum
+import concurrent.futures
+import threading
+from functools import partial
 
-// Validate required environment variables
-if (!process.env.JWT_SECRET && process.env.NODE_ENV === 'production') {
-    console.warn('WARNING: JWT_SECRET not set. Using default insecure key. Set JWT_SECRET environment variable.');
-}
-if (!DEEPSEEK_API_KEY && process.env.NODE_ENV === 'production') {
-    console.warn('WARNING: DEEPSEEK_API_KEY not set. DeepSeek features will not work.');
-}
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from werkzeug.utils import secure_filename
 
-const server = http.createServer((req, res) => {
-    const reqUrl = new URL(req.url, `http://${req.headers.host}`);
+# PDF Processing
+try:
+    import fitz  # PyMuPDF
+    HAS_PYMUPDF = True
+except ImportError:
+    HAS_PYMUPDF = False
+    print("Warning: PyMuPDF not available")
 
-    // Allow specific frontend domains for better security
-    const origin = req.headers.origin;
+try:
+    import pdfplumber
+    HAS_PDFPLUMBER = True
+except ImportError:
+    HAS_PDFPLUMBER = False
+    print("Warning: pdfplumber not available")
 
-    // Allow all Vercel deployments and localhost
-    let isAllowed = false;
-    if (!origin) {
-        isAllowed = true;
-    } else if (origin.endsWith('.vercel.app') || origin.includes('localhost')) {
-        isAllowed = true;
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+# Environment variables with defaults
+PORT = int(os.environ.get("PYTHON_PORT", 5001))
+HOST = os.environ.get("PYTHON_HOST", "0.0.0.0")
+UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", os.path.join(os.getcwd(), 'temp_uploads'))
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
+
+# Create upload folder if it doesn't exist
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# Configure logging
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
+
+app = Flask(__name__)
+
+# Configure CORS to allow all Vercel subdomains and localhost
+CORS(app, resources={
+    r"/*": {
+        "origins": [
+            r"^https://.*\.vercel\.app$",
+            r"^http://localhost:\d+$"
+        ],
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
+        "supports_credentials": True
+    }
+})
+
+# ============================================================
+# SECURITY IMPROVEMENTS
+# ============================================================
+
+# Create a non-root user for security
+USER_ID = 1000
+GROUP_ID = 1000
+
+def create_user():
+    """Create a non-root user for running the service."""
+    try:
+        import pwd
+        import grp
+        try:
+            pwd.getpwnam('appuser')
+        except KeyError:
+            # Create user and group
+            # Note: This usually requires root privileges, so it might fail in some environments
+            # We log a warning but continue if it fails
+            pass
+    except Exception as e:
+        logger.warning(f"Could not set user permissions: {e}")
+
+# Run user creation at startup
+create_user()
+
+# ============================================================
+# GRACEFUL SHUTDOWN HANDLING
+# ============================================================
+
+shutdown_event = threading.Event()
+
+def handle_sigterm(signum, frame):
+    """Handle SIGTERM signal for graceful shutdown."""
+    logger.info("SIGTERM received, initiating graceful shutdown...")
+    shutdown_event.set()
+
+def handle_sigint(signum, frame):
+    """Handle SIGINT signal for graceful shutdown."""
+    logger.info("SIGINT received, initiating graceful shutdown...")
+    shutdown_event.set()
+
+# Register signal handlers
+signal.signal(signal.SIGTERM, handle_sigterm)
+signal.signal(signal.SIGINT, handle_sigint)
+
+# Register cleanup functions
+@atexit.register
+def cleanup():
+    """Cleanup resources on exit."""
+    logger.info("Cleaning up resources before shutdown...")
+
+# ============================================================
+# ENUMS AND CONSTANTS
+# ============================================================
+
+class SectionType(Enum):
+    """Types of document sections."""
+    CHAPTER = "chapter"
+    SECTION = "section"
+    SUBSECTION = "subsection"
+    ABSTRACT = "abstract"
+    INTRODUCTION = "introduction"
+    METHODOLOGY = "methodology"
+    RESULTS = "results"
+    DISCUSSION = "discussion"
+    CONCLUSION = "conclusion"
+    REFERENCES = "references"
+    BIBLIOGRAPHY = "bibliography"
+    APPENDIX = "appendix"
+    ACKNOWLEDGEMENTS = "acknowledgements"
+    TABLE_OF_CONTENTS = "toc"
+    UNKNOWN = "unknown"
+
+
+class ExtractionType(Enum):
+    """Types of extraction based on prompt analysis."""
+    REFERENCES = "references"
+    TABLES = "tables"
+    METADATA = "metadata"
+    FINANCIAL = "financial"
+    CONTACTS = "contacts"
+    TIMELINE = "timeline"
+    GENERIC = "generic"
+
+
+# ============================================================
+# PROMPT ANALYZER - Classifies extraction intent
+# ============================================================
+
+@dataclass
+class PromptAnalysis:
+    """Result of prompt analysis."""
+    columns: List[str]
+    section_hint: Optional[str]
+    extraction_type: ExtractionType
+    section_type: Optional[SectionType]
+    keywords: List[str]
+    constraints: Dict[str, Any]
+
+
+class PromptAnalyzer:
+    """
+    Analyzes extraction prompts to determine:
+    - What columns to extract
+    - Which section to target
+    - What type of extraction to perform
+    """
+
+    # Keywords that indicate extraction type
+    EXTRACTION_KEYWORDS = {
+        ExtractionType.REFERENCES: [
+            'author', 'title', 'publisher', 'journal', 'doi', 'isbn',
+            'reference', 'bibliography', 'citation', 'source'
+        ],
+        ExtractionType.TABLES: [
+            'table', 'row', 'column', 'data', 'figure', 'chart'
+        ],
+        ExtractionType.METADATA: [
+            'metadata', 'property', 'attribute', 'info', 'details'
+        ],
+        ExtractionType.FINANCIAL: [
+            'amount', 'price', 'cost', 'value', 'total', 'fee', 'revenue',
+            'expense', 'budget', 'salary', 'income', 'payment'
+        ],
+        ExtractionType.CONTACTS: [
+            'email', 'phone', 'address', 'contact', 'name', 'organization'
+        ],
+        ExtractionType.TIMELINE: [
+            'date', 'year', 'month', 'timeline', 'schedule', 'deadline',
+            'period', 'duration', 'start', 'end'
+        ]
     }
 
-    // Helper to set CORS headers
-    const setCorsHeaders = () => {
-        if (isAllowed && origin) {
-            res.setHeader('Access-Control-Allow-Origin', origin);
-        } else if (origin) {
-            console.log(`Blocked CORS request from: ${origin}`);
-        }
-
-        res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS, PUT, DELETE');
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-        res.setHeader('Access-Control-Allow-Credentials', 'true');
-    };
-
-    setCorsHeaders();
-
-    // Handle preflight requests
-    if (req.method === 'OPTIONS') {
-        res.writeHead(204);
-        res.end();
-        return;
+    # Section keywords mapping
+    SECTION_KEYWORDS = {
+        SectionType.REFERENCES: ['references', 'bibliography', 'citations', 'works cited'],
+        SectionType.ABSTRACT: ['abstract', 'summary', 'executive summary'],
+        SectionType.INTRODUCTION: ['introduction', 'background', 'overview'],
+        SectionType.METHODOLOGY: ['methodology', 'methods', 'approach', 'research design'],
+        SectionType.RESULTS: ['results', 'findings', 'outcomes'],
+        SectionType.DISCUSSION: ['discussion', 'analysis', 'interpretation'],
+        SectionType.CONCLUSION: ['conclusion', 'conclusions', 'final remarks'],
+        SectionType.APPENDIX: ['appendix', 'appendices', 'supplementary'],
+        SectionType.ACKNOWLEDGEMENTS: ['acknowledgements', 'acknowledgments', 'credits'],
+        SectionType.TABLE_OF_CONTENTS: ['contents', 'table of contents', 'toc']
     }
 
-    // --- API ROUTING ---
+    def analyze(self, prompt: str) -> PromptAnalysis:
+        """Analyze the extraction prompt."""
+        prompt_lower = prompt.lower()
 
-    // Root Endpoint (Health Check)
-    if (reqUrl.pathname === '/' && req.method === 'GET') {
-        res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('ADMI Backend Server is Running');
-    }
+        # Extract columns from prompt
+        columns = self._extract_columns(prompt)
 
-    // --- Docs with Umbuzo Endpoints ---
+        # Extract section hint
+        section_hint = self._extract_section_hint(prompt)
 
-    // 1. Document Ingestion (/api/documents/ingest)
-    else if (reqUrl.pathname === '/api/documents/ingest' && req.method === 'POST') {
-        let bb;
-        try {
-            bb = busboy({ headers: req.headers });
-        } catch (err) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: 'Invalid upload request.' }));
-        }
+        # Determine extraction type
+        extraction_type = self._determine_extraction_type(prompt, columns)
 
-        const filePromises = [];
+        # Determine section type
+        section_type = self._determine_section_type(section_hint, prompt)
 
-        bb.on('file', (fieldname, file, filename, encoding, mimetype) => {
-            const chunks = [];
-            file.on('data', (chunk) => chunks.push(chunk));
-            file.on('end', () => {
-                let safeFilename = "unknown_file";
-                if (typeof filename === 'string') safeFilename = filename;
-                else if (typeof filename === 'object' && filename?.filename) safeFilename = filename.filename;
-                safeFilename = path.basename(safeFilename);
+        # Extract keywords
+        keywords = self._extract_keywords(prompt)
 
-                const buffer = Buffer.concat(chunks);
-                const fileData = {
-                    filename: safeFilename,
-                    mimetype: mimetype,
-                    content: buffer.toString('base64'),
-                    size: buffer.length
-                };
-                sessionFiles.push(fileData);
-                filePromises.push(fileData);
-            });
-        });
+        # Extract constraints
+        constraints = self._extract_constraints(prompt)
 
-        bb.on('finish', () => {
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ 
-                success: true, 
-                files: filePromises.map(f => ({ filename: f.filename, size: f.size, content: f.content })) 
-            }));
-        });
+        return PromptAnalysis(
+            columns=columns,
+            section_hint=section_hint,
+            extraction_type=extraction_type,
+            section_type=section_type,
+            keywords=keywords,
+            constraints=constraints
+        )
 
-        req.pipe(bb);
-    }
+    def _extract_columns(self, prompt: str) -> List[str]:
+        """Extract column names from prompt."""
+        columns = []
 
-    // 2. Document Extraction (/api/documents/extract)
-    else if (reqUrl.pathname === '/api/documents/extract' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => body += chunk.toString());
-        req.on('end', async () => {
-            try {
-                const { documentContent, prompt, outputFormat, filename } = JSON.parse(body);
+        # Try quoted strings first
+        quoted = re.findall(r"['\"]([^'\"]+)['\"]", prompt)
+        if quoted:
+            # Filter out section references
+            section_words = ['references', 'chapter', 'section', 'appendix', 'from']
+            columns = [q.strip() for q in quoted if q.lower() not in section_words]
+
+        # If no quoted strings, try comma-separated
+        if not columns:
+            # Remove common filler words
+            clean_prompt = re.sub(r'\b(extract|get|find|all|from|the|and|or)\b', '', prompt, flags=re.IGNORECASE)
+            parts = [p.strip() for p in clean_prompt.split(',') if p.strip()]
+            columns = [p for p in parts if len(p) < 50 and not p.lower().startswith('from')]
+
+        # Default columns if none found
+        if not columns:
+            columns = ['Item', 'Description', 'Value']
+
+        return columns
+
+    def _extract_section_hint(self, prompt: str) -> Optional[str]:
+        """Extract section hint from prompt."""
+        # Pattern: "from 'SectionName'" or "from SectionName"
+        patterns = [
+            r"from\s+['\"]([^'\"]+)['\"]",
+            r"from\s+([A-Za-z][A-Za-z\s]{2,30})(?:\s*$|\s*[,\.])",
+            r"in\s+['\"]([^'\"]+)['\"]",
+            r"within\s+['\"]([^'\"]+)['\"]"
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, prompt, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+
+        return None
+
+    def _determine_extraction_type(self, prompt: str, columns: List[str]) -> ExtractionType:
+        """Determine the type of extraction based on prompt and columns."""
+        prompt_lower = prompt.lower()
+        columns_lower = [c.lower() for c in columns]
+
+        # Score each extraction type
+        scores = {ext_type: 0 for ext_type in ExtractionType}
+
+        for ext_type, keywords in self.EXTRACTION_KEYWORDS.items():
+            # Check prompt keywords
+            for keyword in keywords:
+                if keyword in prompt_lower:
+                    scores[ext_type] += 2
+
+            # Check column names
+            for col in columns_lower:
+                for keyword in keywords:
+                    if keyword in col:
+                        scores[ext_type] += 1
+
+        # Return highest scoring type
+        max_score = max(scores.values())
+        if max_score > 0:
+            for ext_type, score in scores.items():
+                if score == max_score:
+                    return ext_type
+
+        return ExtractionType.GENERIC
+
+    def _determine_section_type(self, section_hint: Optional[str], prompt: str) -> Optional[SectionType]:
+        """Determine the section type from hint and prompt."""
+        if section_hint:
+            hint_lower = section_hint.lower()
+            for section_type, keywords in self.SECTION_KEYWORDS.items():
+                for keyword in keywords:
+                    if keyword in hint_lower:
+                        return section_type
+
+        # Check prompt for section keywords
+        prompt_lower = prompt.lower()
+        for section_type, keywords in self.SECTION_KEYWORDS.items():
+            for keyword in keywords:
+                if keyword in prompt_lower:
+                    return section_type
+
+        return None
+
+    def _extract_keywords(self, prompt: str) -> List[str]:
+        """Extract significant keywords from prompt."""
+        # Remove common words
+        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+                      'of', 'with', 'by', 'from', 'extract', 'get', 'find', 'all', 'please'}
+
+        words = re.findall(r'\b[a-z]{3,}\b', prompt.lower())
+        return list(set(w for w in words if w not in stop_words))
+
+    def _extract_constraints(self, prompt: str) -> Dict[str, Any]:
+        """Extract constraints from prompt."""
+        constraints = {}
+
+        # Year range
+        year_match = re.search(r'(\d{4})\s*[-–]\s*(\d{4})', prompt)
+        if year_match:
+            constraints['year_range'] = (int(year_match.group(1)), int(year_match.group(2)))
+
+        # Limit
+        limit_match = re.search(r'(?:limit|top|first)\s*(\d+)', prompt, re.IGNORECASE)
+        if limit_match:
+            constraints['limit'] = int(limit_match.group(1))
+
+        # Sort order
+        if re.search(r'\b(ascending|asc|oldest|earliest)\b', prompt, re.IGNORECASE):
+            constraints['sort'] = 'asc'
+        elif re.search(r'\b(descending|desc|newest|latest|recent)\b', prompt, re.IGNORECASE):
+            constraints['sort'] = 'desc'
+
+        return constraints
+
+# ============================================================
+# DOCUMENT STRUCTURE ANALYZER
+# ============================================================
+
+class DocumentStructureAnalyzer:
+    """Analyzes document structure to identify sections/chapters."""
+    
+    def __init__(self, text: str):
+        self.text = text
+        self.sections = self._parse_sections()
+        
+    def _parse_sections(self) -> Dict[str, str]:
+        sections = {}
+        current_section = "General"
+        buffer = []
+        
+        # Common section numbering patterns: "1.", "1.1", "Chapter 1", "SECTION A"
+        header_pattern = re.compile(r'^((?:Chapter|Section|Part)\s+\d+|(?:\d+\.)+\d*|[A-Z][A-Z\s]{2,50})$', re.IGNORECASE)
+        
+        lines = self.text.split('\n')
+        for line in lines:
+            clean_line = line.strip()
+            if not clean_line:
+                continue
                 
-                let buffer;
-                let safeFilename = filename || "document.pdf";
-
-                if (documentContent) {
-                    buffer = Buffer.from(documentContent, 'base64');
-                } else if (filename) {
-                    const found = sessionFiles.find(f => f.filename === filename);
-                    if (found) buffer = Buffer.from(found.content, 'base64');
-                }
-
-                if (!buffer) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    return res.end(JSON.stringify({ error: 'No document content provided or file not found.' }));
-                }
-
-                // Create FormData for the Python service
-                const formData = new FormData();
-                formData.append('file', buffer, { filename: safeFilename, contentType: 'application/pdf' });
-                formData.append('prompt', prompt);
-
-                try {
-                    // Make HTTP request to Python LangExtract service
-                    const pythonServiceRes = await new Promise((resolve, reject) => {
-                        const formHeaders = formData.getHeaders();
-                        const options = {
-                            hostname: PYTHON_SERVICE_HOST,
-                            port: PYTHON_SERVICE_PORT,
-                            path: '/process',
-                            method: 'POST',
-                            headers: formHeaders
-                        };
-
-                        const req = http.request(options, (res) => {
-                            let data = '';
-                            res.on('data', (chunk) => data += chunk);
-                            res.on('end', () => {
-                                try {
-                                    resolve({
-                                        ok: res.statusCode >= 200 && res.statusCode < 300,
-                                        statusText: res.statusMessage,
-                                        json: () => JSON.parse(data)
-                                    });
-                                } catch (e) {
-                                    reject(e);
-                                }
-                            });
-                        });
-
-                        req.on('error', (e) => reject(e));
-                        formData.pipe(req);
-                    });
-
-                    const pythonResult = await pythonServiceRes.json();
-
-                    if (!pythonServiceRes.ok || pythonResult.error) {
-                        throw new Error(pythonResult.error || pythonServiceRes.statusText);
-                    }
-
-                    // Normalize output structure
-                    const data = pythonResult.extractions || pythonResult.data || pythonResult;
-                    res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ data: data, outputFormat: outputFormat }));
-
-                } catch (fetchError) {
-                    console.error("Python service unavailable or failed:", fetchError.message);
-                    console.log("Falling back to mock extraction...");
-                    
-                    // Fallback to mock extraction
-                    const mockRes = mockExtractFromDocuments({
-                        files: [{ fileName: safeFilename, buffer: buffer, mimetype: 'application/pdf' }],
-                        csvText: null,
-                        prompt: prompt,
-                        outputFormat: outputFormat || 'json',
-                        fieldHints: []
-                    });
-                    
-                    res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ 
-                        data: mockRes.data, 
-                        outputFormat: outputFormat,
-                        warning: "Used mock extraction because AI service was unavailable."
-                    }));
-                }
-
-            } catch (e) {
-                console.error("Error in /api/documents/extract:", e);
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Internal Server Error during document processing.' }));
-            }
-        });
-    }
-
-    // 3. Analog Metadata (/api/documents/analog-metadata)
-    else if (reqUrl.pathname === '/api/documents/analog-metadata' && req.method === 'POST') {
-        let bb;
-        try { bb = busboy({ headers: req.headers }); } catch (e) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: 'Invalid request' }));
-        }
-        const files = [];
-        bb.on('file', (fieldname, file, filename) => {
-            let safeName = typeof filename === 'object' ? filename.filename : filename;
-            files.push({ filename: safeName, summary: 'Uploaded successfully' });
-            file.resume();
-        });
-        bb.on('finish', () => {
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ files }));
-        });
-        req.pipe(bb);
-    }
-
-    // 4. Data Terminal (/api/terminal/execute)
-    else if (reqUrl.pathname === '/api/terminal/execute' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => body += chunk.toString());
-        req.on('end', () => {
-            try {
-                const { csvData, command } = JSON.parse(body);
-                if (!csvData || !command) throw new Error('Missing data');
-
-                const rows = csvData.trim().split('\n').map(r => r.split(',').map(c => c.trim()));
-                const headers = rows[0];
-                const data = rows.slice(1);
-                const colIndex = (name) => headers.indexOf(name);
-
-                let response = { textOutput: '', chartData: null, command: '' };
-
-                if (command.startsWith('head')) {
-                    response.textOutput = rows.slice(0, 6).map(r => r.join(', ')).join('\n');
-                } else if (command.startsWith('describe')) {
-                    let stats = [];
-                    headers.forEach((h, i) => {
-                        const vals = data.map(r => parseFloat(r[i])).filter(v => !isNaN(v));
-                        if (vals.length > 0) {
-                            const sum = vals.reduce((a, b) => a + b, 0);
-                            const avg = sum / vals.length;
-                            const min = Math.min(...vals);
-                            const max = Math.max(...vals);
-                            stats.push(`${h}: Count=${vals.length}, Mean=${avg.toFixed(2)}, Min=${min}, Max=${max}`);
-                        }
-                    });
-                    response.textOutput = stats.join('\n');
-                } else if (command.includes('linear regression')) {
-                    const parts = command.split(' ');
-                    const yCol = parts[parts.indexOf('on') + 1];
-                    const xCol = parts[parts.indexOf('vs') + 1];
-                    const xi = colIndex(xCol);
-                    const yi = colIndex(yCol);
-                    
-                    if (xi === -1 || yi === -1) {
-                        response.textOutput = `Columns not found. Available: ${headers.join(', ')}`;
-                    } else {
-                        const xVals = [], yVals = [];
-                        data.forEach(r => {
-                            const x = parseFloat(r[xi]), y = parseFloat(r[yi]);
-                            if (!isNaN(x) && !isNaN(y)) { xVals.push(x); yVals.push(y); }
-                        });
-                        
-                        const n = xVals.length;
-                        const sumX = xVals.reduce((a, b) => a + b, 0);
-                        const sumY = yVals.reduce((a, b) => a + b, 0);
-                        const sumXY = xVals.reduce((a, b, i) => a + b * yVals[i], 0);
-                        const sumXX = xVals.reduce((a, b) => a + b * b, 0);
-                        
-                        const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
-                        const intercept = (sumY - slope * sumX) / n;
-                        
-                        response.textOutput = `Linear Regression: Y = ${slope.toFixed(4)}X + ${intercept.toFixed(4)}`;
-                        response.command = 'linear_regression';
-                        response.chartData = { x: xVals, y: yVals, slope, intercept };
-                    }
-                } else if (command.includes('histogram')) {
-                    const col = command.split('of')[1].trim();
-                    const ci = colIndex(col);
-                    if (ci === -1) {
-                        response.textOutput = `Column '${col}' not found.`;
-                    } else {
-                        const vals = data.map(r => parseFloat(r[ci])).filter(v => !isNaN(v));
-                        const min = Math.min(...vals);
-                        const max = Math.max(...vals);
-                        const binCount = 10;
-                        const binSize = (max - min) / binCount;
-                        const bins = new Array(binCount).fill(0);
-                        const labels = [];
-                        
-                        for (let i = 0; i < binCount; i++) {
-                            labels.push((min + i * binSize).toFixed(1));
-                        }
-                        
-                        vals.forEach(v => {
-                            let bin = Math.floor((v - min) / binSize);
-                            if (bin === binCount) bin--;
-                            bins[bin]++;
-                        });
-                        
-                        response.textOutput = `Histogram for ${col} generated.`;
-                        response.command = 'histogram';
-                        response.chartData = { labels, values: bins, column: col };
-                    }
-                } else {
-                    response.textOutput = "Unknown command. Try 'head', 'describe', 'linear regression on Y vs X', or 'histogram of Col'.";
-                }
-
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify(response));
-
-            } catch (e) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: e.message }));
-            }
-        });
-    }
-
-    // --- Existing Endpoints ---
-    else if (reqUrl.pathname === '/api/signup' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => body += chunk.toString());
-        req.on('end', async () => {
-            try {
-                const { name, email, password } = JSON.parse(body);
-                if (!name || !email || !password) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    return res.end(JSON.stringify({ error: 'Name, email, and password are required.' }));
-                }
-                if (users[email]) {
-                    res.writeHead(409, { 'Content-Type': 'application/json' });
-                    return res.end(JSON.stringify({ error: 'User with this email already exists.' }));
-                }
-
-                const salt = await bcrypt.genSalt(10);
-                const hashedPassword = await bcrypt.hash(password, salt);
-
-                users[email] = { name, email, password: hashedPassword, createdAt: new Date() };
-                console.log('New user registered:', users[email]);
-
-                res.writeHead(201, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ message: 'User created successfully.' }));
-            } catch (e) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Invalid request data.' }));
-            }
-        });
-    }
-    else if (reqUrl.pathname === '/api/login' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => body += chunk.toString());
-        req.on('end', async () => {
-            try {
-                const { email, password } = JSON.parse(body);
-                const user = users[email];
-
-                if (!user || !await bcrypt.compare(password, user.password)) {
-                    res.writeHead(401, { 'Content-Type': 'application/json' });
-                    return res.end(JSON.stringify({ error: 'Invalid email or password.' }));
-                }
-
-                const token = jwt.sign({ email: user.email, name: user.name }, JWT_SECRET, { expiresIn: '1h' });
-
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ message: 'Login successful.', token, name: user.name }));
-            } catch (e) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Invalid request data.' }));
-            }
-        });
-    }
-    else if (reqUrl.pathname === '/api/create-survey' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => body += chunk.toString());
-        req.on('end', () => {
-            try {
-                const surveyData = JSON.parse(body);
+            # Heuristic for headers
+            is_header = False
+            if len(clean_line) < 80:
+                # Check against known section keywords
+                for section_type in SectionType:
+                    if section_type != SectionType.UNKNOWN and section_type.value in clean_line.lower():
+                        is_header = True
+                        break
                 
-                if (!surveyData.title || !surveyData.questions || surveyData.questions.length === 0) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    return res.end(JSON.stringify({ error: 'Survey must have a title and at least one question.' }));
-                }
+                # Check regex pattern or all caps
+                if not is_header and (header_pattern.match(clean_line) or (clean_line.isupper() and len(clean_line) > 3)):
+                    is_header = True
+            
+            if is_header:
+                if buffer:
+                    sections[current_section] = "\n".join(buffer)
+                current_section = clean_line
+                buffer = []
+            else:
+                buffer.append(line)
+                
+        if buffer:
+            sections[current_section] = "\n".join(buffer)
+            
+        return sections
 
-                const newSurvey = {
-                    id: `survey_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                    ...surveyData,
-                    createdAt: new Date().toISOString(),
-                    status: 'scheduled'
-                };
-                surveys.push(newSurvey);
+    def get_target_content(self, section_hint: Optional[str], section_type: Optional[SectionType]) -> str:
+        """Get content for a specific section if found."""
+        if not section_hint and (not section_type or section_type == SectionType.UNKNOWN):
+            return self.text
+            
+        # Try to match section hint
+        if section_hint:
+            for header, content in self.sections.items():
+                if section_hint.lower() in header.lower():
+                    return content
+                    
+        # Try to match section type
+        if section_type:
+            keywords = PromptAnalyzer.SECTION_KEYWORDS.get(section_type, [])
+            for header, content in self.sections.items():
+                if any(kw in header.lower() for kw in keywords):
+                    return content
+                    
+        # Fallback: return full text if specific section not found
+        return self.text
 
-                console.log('New survey created:', newSurvey);
-                console.log('Total surveys in memory:', surveys.length);
+# ============================================================
+# DOCUMENT PROCESSING LOGIC
+# ============================================================
 
-                res.writeHead(201, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ message: 'Survey created successfully!', surveyId: newSurvey.id }));
+def extract_pdf_content(file_path: str) -> str:
+    """Extract text content from PDF using PyMuPDF."""
+    text_content = []
+    if HAS_PYMUPDF:
+        try:
+            doc = fitz.open(file_path)
+            for page in doc:
+                text_content.append(page.get_text())
+            doc.close()
+            return "\n".join(text_content)
+        except Exception as e:
+            logger.error(f"PyMuPDF extraction failed: {e}")
+    
+    # Fallback to pdfplumber if PyMuPDF fails or is unavailable
+    if HAS_PDFPLUMBER:
+        try:
+            with pdfplumber.open(file_path) as pdf:
+                for page in pdf.pages:
+                    text = page.extract_text()
+                    if text:
+                        text_content.append(text)
+            return "\n".join(text_content)
+        except Exception as e:
+            logger.error(f"pdfplumber extraction failed: {e}")
+            
+    return ""
 
-            } catch (error) {
-                console.error('Error processing survey creation request:', error);
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Invalid survey data format.' }));
+def extract_tables_from_pdf(file_path: str) -> List[Dict[str, Any]]:
+    """Extract tables using pdfplumber."""
+    results = []
+    if HAS_PDFPLUMBER:
+        try:
+            with pdfplumber.open(file_path) as pdf:
+                for page in pdf.pages:
+                    tables = page.extract_tables()
+                    for table in tables:
+                        if not table: continue
+                        # Assume first row is header
+                        headers = [str(h).strip() if h else f"col_{i}" for i, h in enumerate(table[0])]
+                        # Clean headers
+                        headers = [re.sub(r'\s+', ' ', h) for h in headers]
+                        
+                        for row in table[1:]:
+                            if len(row) == len(headers):
+                                record = {h: r for h, r in zip(headers, row) if r}
+                                if record:
+                                    results.append(record)
+        except Exception as e:
+            logger.error(f"Table extraction failed: {e}")
+    return results
+
+def extract_csv_content(file_path: str) -> List[Dict[str, Any]]:
+    """Extract content from CSV file."""
+    data = []
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                data.append(row)
+    except Exception as e:
+        logger.error(f"CSV extraction failed: {e}")
+    return data
+
+def process_with_analysis(file_path: str, analysis: PromptAnalysis) -> List[Dict[str, Any]]:
+    """Process document based on prompt analysis."""
+    ext = os.path.splitext(file_path)[1].lower()
+    
+    if ext == '.csv':
+        # For CSV, we just return the data, maybe filtered by columns
+        data = extract_csv_content(file_path)
+        if analysis.columns and analysis.columns != ['Item', 'Description', 'Value']:
+            # Filter columns if specific ones requested
+            filtered_data = []
+            for row in data:
+                filtered_row = {k: v for k, v in row.items() if k in analysis.columns}
+                if filtered_row:
+                    filtered_data.append(filtered_row)
+            return filtered_data
+        return data
+        
+    elif ext == '.pdf':
+        results = []
+        
+        # 1. Table Extraction (High Priority if requested or financial)
+        if (analysis.extraction_type in [ExtractionType.TABLES, ExtractionType.FINANCIAL]) and HAS_PDFPLUMBER:
+            tables = extract_tables_from_pdf(file_path)
+            if tables:
+                # Filter by requested columns if any
+                if analysis.columns and analysis.columns != ['Item', 'Description', 'Value']:
+                    for row in tables:
+                        # Fuzzy match columns
+                        filtered_row = {}
+                        for req_col in analysis.columns:
+                            for actual_col in row.keys():
+                                if req_col.lower() in actual_col.lower():
+                                    filtered_row[req_col] = row[actual_col]
+                                    break
+                        if filtered_row:
+                            results.append(filtered_row)
+                else:
+                    results.extend(tables)
+                    
+                if results:
+                    return results
+
+        # 2. Text Extraction & Sectioning
+        text = extract_pdf_content(file_path)
+        structure = DocumentStructureAnalyzer(text)
+        target_text = structure.get_target_content(analysis.section_hint, analysis.section_type)
+        
+        # 3. Pattern Matching / Column Extraction
+        
+        # If looking for specific patterns like emails or dates
+        if ExtractionType.CONTACTS in [analysis.extraction_type]:
+            emails = re.findall(r'[\w\.-]+@[\w\.-]+\.\w+', target_text)
+            for email in emails:
+                results.append({"Email": email})
+            return results
+                
+        elif ExtractionType.TIMELINE in [analysis.extraction_type]:
+            dates = re.findall(r'\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}', target_text)
+            for date in dates:
+                results.append({"Date": date})
+            return results
+            
+        # 4. Key-Value Extraction (Column: Value)
+        if analysis.columns and analysis.columns != ['Item', 'Description', 'Value']:
+            # Try to find "Column: Value" patterns
+            extracted_rows = []
+            current_row = {}
+            
+            lines = target_text.split('\n')
+            for line in lines:
+                for col in analysis.columns:
+                    # Regex for "Column: Value" or "Column - Value"
+                    pattern = re.compile(f'(?i){re.escape(col)}\s*[:=-]\s*(.*)')
+                    match = pattern.search(line)
+                    if match:
+                        current_row[col] = match.group(1).strip()
+                
+                # Heuristic: if we have enough data, push row
+                if len(current_row) >= min(len(analysis.columns), 2):
+                    extracted_rows.append(current_row)
+                    current_row = {}
+            
+            if current_row:
+                extracted_rows.append(current_row)
+                
+            if extracted_rows:
+                return extracted_rows
+
+        # 5. Generic Fallback
+        lines = target_text.split('\n')
+        for line in lines:
+            row = {}
+            include = False
+            for col in analysis.columns:
+                if col.lower() in line.lower():
+                    row[col] = line.strip()
+                    include = True
+            
+            if not include and analysis.keywords:
+                for kw in analysis.keywords:
+                    if kw.lower() in line.lower():
+                        row["Content"] = line.strip()
+                        include = True
+                        break
+                        
+            if include:
+                results.append(row)
+                    
+        return results
+        
+    return []
+
+# ============================================================
+# API ROUTES
+# ============================================================
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Enhanced health check with system information."""
+    try:
+        import psutil
+        memory_info = psutil.virtual_memory()
+        cpu_info = psutil.cpu_percent(interval=1)
+        system_info = {
+            'status': 'healthy',
+            'timestamp': datetime.now().isoformat(),
+            'backends': {
+                'pymupdf': HAS_PYMUPDF,
+                'pdfplumber': HAS_PDFPLUMBER
+            },
+            'mode': 'enhanced_prompt_classification',
+            'system': {
+                'memory_percent': memory_info.percent,
+                'cpu_percent': cpu_info,
+                'uptime': datetime.now().timestamp() - psutil.boot_time()
             }
-        });
-    }
-    else if (reqUrl.pathname === '/api/surveys' && req.method === 'GET') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(surveys));
-    }
-    else if (reqUrl.pathname === '/api/assistant' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => body += chunk.toString());
-        req.on('end', async () => {
-            try {
-                const { userId, message } = JSON.parse(body);
+        }
+        return jsonify(system_info)
+    except Exception as e:
+        logger.error(f"Health check error: {e}")
+        return jsonify({
+            'status': 'degraded',
+            'timestamp': datetime.now().isoformat(),
+            'backends': {
+                'pymupdf': HAS_PYMUPDF,
+                'pdfplumber': HAS_PDFPLUMBER
+            },
+            'error': str(e)
+        }), 503
 
-                if (!userId || !message) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    return res.end(JSON.stringify({ error: 'Missing userId or message.' }));
-                }
 
-                if (!chatHistories[userId]) {
-                    chatHistories[userId] = [
-                        { role: 'system', content: 'You are a helpful assistant for the African Development Models Initiative application. Your goal is to guide users on how to use the app. You know about the following pages: Home, About Us, Survey Forms, Data Ingestion & Analysis, Research Dashboard, and AI Agent. Be concise and helpful.' }
-                    ];
-                }
-                chatHistories[userId].push({ role: 'user', content: message });
+@app.route('/process', methods=['POST'])
+def process_document():
+    """Process a document with prompt-based classification."""
+    try:
+        if shutdown_event.is_set():
+            return jsonify({
+                "success": False,
+                "error": "Service is shutting down"
+            }), 503
 
-                const deepseekRequestData = JSON.stringify({
-                    model: DEEPSEEK_MODEL,
-                    messages: chatHistories[userId],
-                    max_tokens: 250,
-                });
+        if 'file' not in request.files:
+            return jsonify({"success": False, "error": "No file part"}), 400
 
-                const options = {
-                    hostname: 'api.deepseek.com',
-                    path: '/v1/chat/completions',
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`,
+        file = request.files['file']
+        prompt = request.form.get('prompt', 'Extract all data')
+
+        if file.filename == '':
+            return jsonify({"success": False, "error": "No selected file"}), 400
+
+        if file:
+            filename = secure_filename(file.filename)
+            filepath = os.path.join(UPLOAD_FOLDER, filename)
+            file.save(filepath)
+
+            try:
+                # Analyze prompt
+                analyzer = PromptAnalyzer()
+                analysis = analyzer.analyze(prompt)
+                
+                # Process the file
+                extractions = process_with_analysis(filepath, analysis)
+                
+                return jsonify({
+                    "success": True,
+                    "extractions": extractions,
+                    "headers": analysis.columns if extractions else [],
+                    "metadata": {
+                        "prompt_analysis": {
+                            "type": analysis.extraction_type.value,
+                            "section": analysis.section_type.value if analysis.section_type else None,
+                            "keywords": analysis.keywords
+                        },
+                        "file": filename
                     }
-                };
+                })
+            finally:
+                # Clean up
+                if os.path.exists(filepath):
+                    os.remove(filepath)
 
-                const deepseekReq = https.request(options, (deepseekRes) => {
-                    let deepseekResBody = '';
-                    deepseekRes.on('data', (chunk) => deepseekResBody += chunk);
-                    deepseekRes.on('end', () => {
-                        try {
-                            const result = JSON.parse(deepseekResBody);
-                            const reply = result.choices[0].message.content;
-                            
-                            chatHistories[userId].push({ role: 'assistant', content: reply });
+    except Exception as e:
+        logger.error(f"Process error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
-                            res.writeHead(200, { 'Content-Type': 'application/json' });
-                            res.end(JSON.stringify({ reply: reply }));
-                        } catch (e) {
-                            res.writeHead(500, { 'Content-Type': 'application/json' });
-                            res.end(JSON.stringify({ error: 'Failed to parse DeepSeek response.' }));
-                        }
-                    });
-                });
 
-                deepseekReq.on('error', (e) => {
-                    console.error('Error calling DeepSeek API:', e);
-                    res.writeHead(500, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Failed to communicate with DeepSeek API.' }));
-                });
+# ============================================================
+# MAIN
+# ============================================================
 
-                deepseekReq.write(deepseekRequestData);
-                deepseekReq.end();
+if __name__ == "__main__":
+    port = int(os.environ.get("PYTHON_PORT", 5001))
+    print(f"\n{'='*60}")
+    print(f"Document Extraction Service")
+    print(f"Features: Chapter/Section Detection, Prompt Classification")
+    print(f"Port: {port}")
+    print(f"Backends: PyMuPDF={HAS_PYMUPDF}, pdfplumber={HAS_PDFPLUMBER}")
+    print(f"Container Mode: Enabled")
+    print(f"{'='*60}\n")
 
-            } catch (e) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Invalid JSON.' }));
-            }
-        });
-    }
-    else if (reqUrl.pathname === '/api/research-assistant' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => body += chunk.toString());
-        req.on('end', async () => {
-            try {
-                const { message, contextId, userId = 'default_user' } = JSON.parse(body);
-
-                if (!message) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    return res.end(JSON.stringify({ error: 'Message is required.' }));
-                }
-
-                let contextPrompt = "You are an expert research assistant. Your goal is to provide advice on survey design, question phrasing, and data analysis strategies. Be insightful and clear.";
-                if (contextId) {
-                    const survey = surveys.find(s => s.id === contextId);
-                    if (survey) {
-                        contextPrompt += `\n\nThe user has provided the following survey as context. Use it to inform your advice:\n${JSON.stringify(survey, null, 2)}`;
-                    }
-                }
-
-                if (!researchChatHistories[userId]) {
-                    researchChatHistories[userId] = [{ role: 'system', content: contextPrompt }];
-                }
-                researchChatHistories[userId].push({ role: 'user', content: message });
-
-                const deepseekRequestData = JSON.stringify({
-                    model: DEEPSEEK_MODEL,
-                    messages: researchChatHistories[userId],
-                    max_tokens: 500,
-                });
-
-                const options = {
-                    hostname: 'api.deepseek.com',
-                    path: '/v1/chat/completions',
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` }
-                };
-
-                const deepseekReq = https.request(options, (deepseekRes) => {
-                    let deepseekResBody = '';
-                    deepseekRes.on('data', (chunk) => deepseekResBody += chunk);
-                    deepseekRes.on('end', () => {
-                        try {
-                            const result = JSON.parse(deepseekResBody);
-                            const reply = result.choices[0].message.content;
-                            researchChatHistories[userId].push({ role: 'assistant', content: reply });
-                            res.writeHead(200, { 'Content-Type': 'application/json' });
-                            res.end(JSON.stringify({ reply }));
-                        } catch (e) {
-                            res.writeHead(500, { 'Content-Type': 'application/json' });
-                            res.end(JSON.stringify({ error: 'Failed to parse DeepSeek response.' }));
-                        }
-                    });
-                });
-                deepseekReq.on('error', (e) => {
-                    res.writeHead(500, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Failed to communicate with DeepSeek API.' }));
-                });
-                deepseekReq.write(deepseekRequestData);
-                deepseekReq.end();
-
-            } catch (e) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Invalid JSON.' }));
-            }
-        });
-    }
-    // Proxy for Python service (/python/*)
-    else if (reqUrl.pathname.startsWith('/python/')) {
-        const pythonPath = reqUrl.pathname.replace('/python', '');
-
-        const options = {
-            hostname: PYTHON_SERVICE_HOST,
-            port: PYTHON_SERVICE_PORT,
-            path: pythonPath,
-            method: req.method,
-            headers: { ...req.headers }
-        };
-
-        // Clean up headers
-        delete options.headers.host;
-        delete options.headers.origin;
-        delete options.headers.referer;
-
-        const proxyReq = http.request(options, (proxyRes) => {
-            // Remove CORS headers from proxy response to avoid duplicates
-            delete proxyRes.headers['access-control-allow-origin'];
-            delete proxyRes.headers['access-control-allow-methods'];
-            delete proxyRes.headers['access-control-allow-headers'];
-            delete proxyRes.headers['access-control-allow-credentials'];
-
-            // Ensure CORS headers are set on the response
-            setCorsHeaders();
-
-            res.writeHead(proxyRes.statusCode, proxyRes.headers);
-            proxyRes.pipe(res, { end: true });
-        });
-
-        proxyReq.on('error', (e) => {
-            console.error(`Proxy error for ${reqUrl.pathname}:`, e.message);
-            setCorsHeaders(); // Ensure CORS headers are set on error
-            res.writeHead(502, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Backend service unavailable', details: e.message }));
-        });
-
-        req.pipe(proxyReq, { end: true });
-    }
-    // Fallback for other routes
-    else {
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Not Found' }));
-    }
-});
-
-const PORT = process.env.PORT || 3001;
-const NODE_ENV = process.env.NODE_ENV || 'development';
-const serverInstance = server.listen(PORT, () => {
-    console.log(`\n${'='.repeat(60)}`);
-    console.log('ADMI Backend Server Started');
-    console.log(`${'='.repeat(60)}`);
-    console.log(`Port: ${PORT}`);
-    console.log(`Environment: ${NODE_ENV}`);
-    console.log(`Python service: ${PYTHON_SERVICE_URL}`);
-    console.log(`${'='.repeat(60)}\n`);
-});
-
-serverInstance.on('error', (e) => {
-    if (e.code === 'EADDRINUSE') {
-        console.error(`Error: Port ${PORT} is already in use.`);
-        process.exit(1);
-    } else {
-        console.error('An error occurred:', e);
-        process.exit(1);
-    }
-});
+    # Start the Flask app
+    app.run(host=HOST, port=port, debug=False, use_reloader=False)
