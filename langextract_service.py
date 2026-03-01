@@ -8,6 +8,8 @@ Features:
 - Strict schema enforcement for consistent columns/rows
 - Clean spreadsheet-style output with proper headers
 - Properly segmented CSV export
+- Table extraction support
+- Key-Value pair extraction
 
 Container Improvements:
 - Environment variable configuration
@@ -392,6 +394,78 @@ class PromptAnalyzer:
         return constraints
 
 # ============================================================
+# DOCUMENT STRUCTURE ANALYZER
+# ============================================================
+
+class DocumentStructureAnalyzer:
+    """Analyzes document structure to identify sections/chapters."""
+    
+    def __init__(self, text: str):
+        self.text = text
+        self.sections = self._parse_sections()
+        
+    def _parse_sections(self) -> Dict[str, str]:
+        sections = {}
+        current_section = "General"
+        buffer = []
+        
+        # Common section numbering patterns: "1.", "1.1", "Chapter 1", "SECTION A"
+        header_pattern = re.compile(r'^((?:Chapter|Section|Part)\s+\d+|(?:\d+\.)+\d*|[A-Z][A-Z\s]{2,50})$', re.IGNORECASE)
+        
+        lines = self.text.split('\n')
+        for line in lines:
+            clean_line = line.strip()
+            if not clean_line:
+                continue
+                
+            # Heuristic for headers
+            is_header = False
+            if len(clean_line) < 80:
+                # Check against known section keywords
+                for section_type in SectionType:
+                    if section_type != SectionType.UNKNOWN and section_type.value in clean_line.lower():
+                        is_header = True
+                        break
+                
+                # Check regex pattern or all caps
+                if not is_header and (header_pattern.match(clean_line) or (clean_line.isupper() and len(clean_line) > 3)):
+                    is_header = True
+            
+            if is_header:
+                if buffer:
+                    sections[current_section] = "\n".join(buffer)
+                current_section = clean_line
+                buffer = []
+            else:
+                buffer.append(line)
+                
+        if buffer:
+            sections[current_section] = "\n".join(buffer)
+            
+        return sections
+
+    def get_target_content(self, section_hint: Optional[str], section_type: Optional[SectionType]) -> str:
+        """Get content for a specific section if found."""
+        if not section_hint and (not section_type or section_type == SectionType.UNKNOWN):
+            return self.text
+            
+        # Try to match section hint
+        if section_hint:
+            for header, content in self.sections.items():
+                if section_hint.lower() in header.lower():
+                    return content
+                    
+        # Try to match section type
+        if section_type:
+            keywords = PromptAnalyzer.SECTION_KEYWORDS.get(section_type, [])
+            for header, content in self.sections.items():
+                if any(kw in header.lower() for kw in keywords):
+                    return content
+                    
+        # Fallback: return full text if specific section not found
+        return self.text
+
+# ============================================================
 # DOCUMENT PROCESSING LOGIC
 # ============================================================
 
@@ -421,6 +495,30 @@ def extract_pdf_content(file_path: str) -> str:
             logger.error(f"pdfplumber extraction failed: {e}")
             
     return ""
+
+def extract_tables_from_pdf(file_path: str) -> List[Dict[str, Any]]:
+    """Extract tables using pdfplumber."""
+    results = []
+    if HAS_PDFPLUMBER:
+        try:
+            with pdfplumber.open(file_path) as pdf:
+                for page in pdf.pages:
+                    tables = page.extract_tables()
+                    for table in tables:
+                        if not table: continue
+                        # Assume first row is header
+                        headers = [str(h).strip() if h else f"col_{i}" for i, h in enumerate(table[0])]
+                        # Clean headers
+                        headers = [re.sub(r'\s+', ' ', h) for h in headers]
+                        
+                        for row in table[1:]:
+                            if len(row) == len(headers):
+                                record = {h: r for h, r in zip(headers, row) if r}
+                                if record:
+                                    results.append(record)
+        except Exception as e:
+            logger.error(f"Table extraction failed: {e}")
+    return results
 
 def extract_csv_content(file_path: str) -> List[Dict[str, Any]]:
     """Extract content from CSV file."""
@@ -452,43 +550,95 @@ def process_with_analysis(file_path: str, analysis: PromptAnalysis) -> List[Dict
         return data
         
     elif ext == '.pdf':
-        text = extract_pdf_content(file_path)
-        
-        # Simple regex-based extraction based on columns
-        # In a real scenario, this would use an LLM or more complex NLP
         results = []
+        
+        # 1. Table Extraction (High Priority if requested or financial)
+        if (analysis.extraction_type in [ExtractionType.TABLES, ExtractionType.FINANCIAL]) and HAS_PDFPLUMBER:
+            tables = extract_tables_from_pdf(file_path)
+            if tables:
+                # Filter by requested columns if any
+                if analysis.columns and analysis.columns != ['Item', 'Description', 'Value']:
+                    for row in tables:
+                        # Fuzzy match columns
+                        filtered_row = {}
+                        for req_col in analysis.columns:
+                            for actual_col in row.keys():
+                                if req_col.lower() in actual_col.lower():
+                                    filtered_row[req_col] = row[actual_col]
+                                    break
+                        if filtered_row:
+                            results.append(filtered_row)
+                else:
+                    results.extend(tables)
+                    
+                if results:
+                    return results
+
+        # 2. Text Extraction & Sectioning
+        text = extract_pdf_content(file_path)
+        structure = DocumentStructureAnalyzer(text)
+        target_text = structure.get_target_content(analysis.section_hint, analysis.section_type)
+        
+        # 3. Pattern Matching / Column Extraction
         
         # If looking for specific patterns like emails or dates
         if ExtractionType.CONTACTS in [analysis.extraction_type]:
-            emails = re.findall(r'[\w\.-]+@[\w\.-]+\.\w+', text)
+            emails = re.findall(r'[\w\.-]+@[\w\.-]+\.\w+', target_text)
             for email in emails:
                 results.append({"Email": email})
+            return results
                 
         elif ExtractionType.TIMELINE in [analysis.extraction_type]:
-            dates = re.findall(r'\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}', text)
+            dates = re.findall(r'\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}', target_text)
             for date in dates:
                 results.append({"Date": date})
-                
-        else:
-            # Generic extraction - just return lines that might contain keywords
-            lines = text.split('\n')
+            return results
+            
+        # 4. Key-Value Extraction (Column: Value)
+        if analysis.columns and analysis.columns != ['Item', 'Description', 'Value']:
+            # Try to find "Column: Value" patterns
+            extracted_rows = []
+            current_row = {}
+            
+            lines = target_text.split('\n')
             for line in lines:
-                row = {}
-                include = False
                 for col in analysis.columns:
-                    if col.lower() in line.lower():
-                        row[col] = line.strip()
-                        include = True
+                    # Regex for "Column: Value" or "Column - Value"
+                    pattern = re.compile(f'(?i){re.escape(col)}\s*[:=-]\s*(.*)')
+                    match = pattern.search(line)
+                    if match:
+                        current_row[col] = match.group(1).strip()
                 
-                if not include and analysis.keywords:
-                    for kw in analysis.keywords:
-                        if kw.lower() in line.lower():
-                            row["Content"] = line.strip()
-                            include = True
-                            break
-                            
-                if include:
-                    results.append(row)
+                # Heuristic: if we have enough data, push row
+                if len(current_row) >= min(len(analysis.columns), 2):
+                    extracted_rows.append(current_row)
+                    current_row = {}
+            
+            if current_row:
+                extracted_rows.append(current_row)
+                
+            if extracted_rows:
+                return extracted_rows
+
+        # 5. Generic Fallback
+        lines = target_text.split('\n')
+        for line in lines:
+            row = {}
+            include = False
+            for col in analysis.columns:
+                if col.lower() in line.lower():
+                    row[col] = line.strip()
+                    include = True
+            
+            if not include and analysis.keywords:
+                for kw in analysis.keywords:
+                    if kw.lower() in line.lower():
+                        row["Content"] = line.strip()
+                        include = True
+                        break
+                        
+            if include:
+                results.append(row)
                     
         return results
         
