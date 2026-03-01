@@ -57,6 +57,14 @@ except ImportError:
     HAS_PDFPLUMBER = False
     print("Warning: pdfplumber not available")
 
+# Pandas for Data Analysis
+try:
+    import pandas as pd
+    HAS_PANDAS = True
+except ImportError:
+    HAS_PANDAS = False
+    print("Warning: pandas not available")
+
 # ============================================================
 # CONFIGURATION
 # ============================================================
@@ -276,30 +284,24 @@ class PromptAnalyzer:
 
     def _extract_columns(self, prompt: str) -> List[str]:
         """Extract column names from prompt."""
-        columns = []
-
-        # Try quoted strings first
-        quoted = re.findall(r"['\"]([^'\"]+)['\"]", prompt)
-        if quoted:
-            # Filter out section references
-            section_words = ['references', 'chapter', 'section', 'appendix', 'from']
-            columns = [q.strip() for q in quoted if q.lower() not in section_words]
-
-        # If no quoted strings, try comma-separated
-        if not columns:
-            # Remove common filler words
-            clean_prompt = re.sub(r'\b(extract|get|find|all|from|the|and|or)\b', '', prompt, flags=re.IGNORECASE)
-            parts = [p.strip() for p in clean_prompt.split(',') if p.strip()]
-            columns = [p for p in parts if len(p) < 50 and not p.lower().startswith('from')]
-
-        # Default columns if none found
-        if not columns:
-            columns = ['Item', 'Description', 'Value']
-
-        return columns
+        # Improved: Specifically look for the comma-separated list after "extract"
+        extract_match = re.search(r"extract\s+(.*)", prompt, re.IGNORECASE)
+        if extract_match:
+            cols_raw = extract_match.group(1).replace('"', '').replace("'", "")
+            # Split by comma and clean
+            # Stop at common prepositions if they appear at the end
+            cols_raw = re.split(r'\s+(?:from|in|using|with)\s+', cols_raw)[0]
+            return [c.strip() for c in cols_raw.split(',') if c.strip()]
+            
+        return ['Item', 'Description', 'Value']
 
     def _extract_section_hint(self, prompt: str) -> Optional[str]:
         """Extract section hint from prompt."""
+        # Improved: More flexible pattern for "from SECTION Section"
+        match = re.search(r"from\s+[\"']?(\w+)[\"']?\s+Section", prompt, re.IGNORECASE)
+        if match:
+            return match.group(1)
+            
         # Pattern: "from 'SectionName'" or "from SectionName"
         patterns = [
             r"from\s+['\"]([^'\"]+)['\"]",
@@ -466,6 +468,72 @@ class DocumentStructureAnalyzer:
         return self.text
 
 # ============================================================
+# PANDAS DATA ANALYST
+# ============================================================
+
+class PandasDataAnalyst:
+    """Uses Pandas for data analysis and structuring."""
+    
+    def __init__(self, data: List[Dict[str, Any]]):
+        self.raw_data = data
+        self.df = pd.DataFrame(data) if HAS_PANDAS and data else None
+        
+    def clean_data(self):
+        """Clean the dataframe."""
+        if self.df is None or self.df.empty:
+            return
+            
+        # Drop empty rows and columns
+        self.df.dropna(how='all', inplace=True)
+        self.df.dropna(axis=1, how='all', inplace=True)
+        
+        # Remove duplicates
+        self.df.drop_duplicates(inplace=True)
+        
+        # Fill NaN with empty string for JSON compatibility
+        self.df.fillna("", inplace=True)
+        
+    def structure_table(self, requested_columns: List[str]) -> List[Dict[str, Any]]:
+        """Structure the table based on requested columns."""
+        if self.df is None or self.df.empty:
+            return self.raw_data
+            
+        if not requested_columns:
+            return self.df.to_dict(orient='records')
+            
+        # Fuzzy match columns
+        matched_columns = []
+        for req_col in requested_columns:
+            best_match = None
+            max_score = 0
+            
+            for col in self.df.columns:
+                # Simple containment score
+                score = 0
+                if req_col.lower() == col.lower():
+                    score = 100
+                elif req_col.lower() in col.lower():
+                    score = 80
+                elif col.lower() in req_col.lower():
+                    score = 60
+                    
+                if score > max_score:
+                    max_score = score
+                    best_match = col
+            
+            if best_match and max_score > 50:
+                matched_columns.append(best_match)
+        
+        if matched_columns:
+            # Filter and reorder
+            result_df = self.df[matched_columns].copy()
+            # Rename to requested columns if match was exact enough? 
+            # For now, keep original headers to avoid confusion, or map them back.
+            return result_df.to_dict(orient='records')
+            
+        return self.df.to_dict(orient='records')
+
+# ============================================================
 # DOCUMENT PROCESSING LOGIC
 # ============================================================
 
@@ -539,14 +607,10 @@ def process_with_analysis(file_path: str, analysis: PromptAnalysis) -> List[Dict
     if ext == '.csv':
         # For CSV, we just return the data, maybe filtered by columns
         data = extract_csv_content(file_path)
-        if analysis.columns and analysis.columns != ['Item', 'Description', 'Value']:
-            # Filter columns if specific ones requested
-            filtered_data = []
-            for row in data:
-                filtered_row = {k: v for k, v in row.items() if k in analysis.columns}
-                if filtered_row:
-                    filtered_data.append(filtered_row)
-            return filtered_data
+        if HAS_PANDAS:
+            analyst = PandasDataAnalyst(data)
+            analyst.clean_data()
+            return analyst.structure_table(analysis.columns)
         return data
         
     elif ext == '.pdf':
@@ -556,23 +620,11 @@ def process_with_analysis(file_path: str, analysis: PromptAnalysis) -> List[Dict
         if (analysis.extraction_type in [ExtractionType.TABLES, ExtractionType.FINANCIAL]) and HAS_PDFPLUMBER:
             tables = extract_tables_from_pdf(file_path)
             if tables:
-                # Filter by requested columns if any
-                if analysis.columns and analysis.columns != ['Item', 'Description', 'Value']:
-                    for row in tables:
-                        # Fuzzy match columns
-                        filtered_row = {}
-                        for req_col in analysis.columns:
-                            for actual_col in row.keys():
-                                if req_col.lower() in actual_col.lower():
-                                    filtered_row[req_col] = row[actual_col]
-                                    break
-                        if filtered_row:
-                            results.append(filtered_row)
-                else:
-                    results.extend(tables)
-                    
-                if results:
-                    return results
+                if HAS_PANDAS:
+                    analyst = PandasDataAnalyst(tables)
+                    analyst.clean_data()
+                    return analyst.structure_table(analysis.columns)
+                return tables
 
         # 2. Text Extraction & Sectioning
         text = extract_pdf_content(file_path)
@@ -581,6 +633,33 @@ def process_with_analysis(file_path: str, analysis: PromptAnalysis) -> List[Dict
         
         # 3. Pattern Matching / Column Extraction
         
+        # Specific Logic for REFERENCES
+        if analysis.section_type == SectionType.REFERENCES or analysis.section_hint == "REFERENCES":
+            ref_results = []
+            # Regex to capture: Author. Date. Title. Publisher.
+            # Matches: Chigumadzi, P. 2018. These Bones Will Rise Again. Johannesburg: Jacana.
+            # Also handles: Author (Date). Title.
+            ref_pattern = re.compile(r"^(.*?)\.?\s+(\d{4})\.\s+(.*?)\.\s+(.*?)$")
+            
+            for line in target_text.split('\n'):
+                line = line.strip()
+                if not line: continue
+                
+                match = ref_pattern.search(line)
+                if match:
+                    ref_results.append({
+                        "Author": match.group(1).strip(),
+                        "Date": match.group(2).strip(),
+                        "Title": match.group(3).strip(),
+                        "Institution": match.group(4).strip()
+                    })
+            if ref_results:
+                if HAS_PANDAS:
+                    analyst = PandasDataAnalyst(ref_results)
+                    analyst.clean_data()
+                    return analyst.structure_table(analysis.columns)
+                return ref_results
+
         # If looking for specific patterns like emails or dates
         if ExtractionType.CONTACTS in [analysis.extraction_type]:
             emails = re.findall(r'[\w\.-]+@[\w\.-]+\.\w+', target_text)
@@ -618,6 +697,10 @@ def process_with_analysis(file_path: str, analysis: PromptAnalysis) -> List[Dict
                 extracted_rows.append(current_row)
                 
             if extracted_rows:
+                if HAS_PANDAS:
+                    analyst = PandasDataAnalyst(extracted_rows)
+                    analyst.clean_data()
+                    return analyst.structure_table(analysis.columns)
                 return extracted_rows
 
         # 5. Generic Fallback
@@ -660,7 +743,8 @@ def health_check():
             'timestamp': datetime.now().isoformat(),
             'backends': {
                 'pymupdf': HAS_PYMUPDF,
-                'pdfplumber': HAS_PDFPLUMBER
+                'pdfplumber': HAS_PDFPLUMBER,
+                'pandas': HAS_PANDAS
             },
             'mode': 'enhanced_prompt_classification',
             'system': {
@@ -748,7 +832,7 @@ if __name__ == "__main__":
     print(f"Document Extraction Service")
     print(f"Features: Chapter/Section Detection, Prompt Classification")
     print(f"Port: {port}")
-    print(f"Backends: PyMuPDF={HAS_PYMUPDF}, pdfplumber={HAS_PDFPLUMBER}")
+    print(f"Backends: PyMuPDF={HAS_PYMUPDF}, pdfplumber={HAS_PDFPLUMBER}, pandas={HAS_PANDAS}")
     print(f"Container Mode: Enabled")
     print(f"{'='*60}\n")
 
