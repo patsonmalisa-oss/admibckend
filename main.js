@@ -31,7 +31,7 @@ const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || "";
 const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || "deepseek-chat";
 const PYTHON_SERVICE_HOST = process.env.PYTHON_SERVICE_HOST || 'localhost';
 const PYTHON_SERVICE_PORT = process.env.PYTHON_SERVICE_PORT || 5001;
-const PYTHON_SERVICE_URL = `http://${PYTHON_SERVICE_HOST}:${PYTHON_SERVICE_PORT}/process`;
+const PYTHON_SERVICE_URL = `https://admfront-five.vercel.app/ai-agent.html/process`;
 
 // Validate required environment variables
 if (!process.env.JWT_SECRET && process.env.NODE_ENV === 'production') {
