@@ -13,6 +13,8 @@ RUN apt-get update && apt-get install -y \
     libffi-dev \
     libssl-dev \
     curl \
+    libjpeg-dev \
+    zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Python requirements
@@ -61,6 +63,8 @@ RUN apt-get update && apt-get install -y \
     curl \
     nodejs \
     npm \
+    libjpeg-dev \
+    zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
