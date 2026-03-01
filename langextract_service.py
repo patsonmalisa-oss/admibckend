@@ -64,7 +64,7 @@ PORT = int(os.environ.get("PYTHON_PORT", 5001))
 HOST = os.environ.get("PYTHON_HOST", "0.0.0.0")
 UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", os.path.join(os.getcwd(), 'temp_uploads'))
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
-CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "https://admfront-ibzanzy6u-pmpanashe489-3815s-projects.vercel.app,https://admfront-five.vercel.app,http://localhost:3000,http://localhost:3001").split(',')
+CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "https://admfront-ibzanzy6u-pmpanashe489-3815s-projects.vercel.app,https://admfront-caftyv63x-pmpanashe489-3815s-projects.vercel.app,https://admfront-five.vercel.app,http://localhost:3000,http://localhost:3001").split(',')
 
 # Create upload folder if it doesn't exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
