@@ -55,16 +55,20 @@ const server = http.createServer((req, res) => {
         isAllowed = true;
     }
 
-    // Set CORS headers
-    if (isAllowed && origin) {
-        res.setHeader('Access-Control-Allow-Origin', origin);
-    } else if (origin) {
-        console.log(`Blocked CORS request from: ${origin}`);
-    }
-    
-    res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS, PUT, DELETE');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    // Helper to set CORS headers
+    const setCorsHeaders = () => {
+        if (isAllowed && origin) {
+            res.setHeader('Access-Control-Allow-Origin', origin);
+        } else if (origin) {
+            console.log(`Blocked CORS request from: ${origin}`);
+        }
+
+        res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS, PUT, DELETE');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+    };
+
+    setCorsHeaders();
 
     // Handle preflight requests
     if (req.method === 'OPTIONS') {
@@ -599,12 +603,16 @@ const server = http.createServer((req, res) => {
             delete proxyRes.headers['access-control-allow-headers'];
             delete proxyRes.headers['access-control-allow-credentials'];
 
+            // Ensure CORS headers are set on the response
+            setCorsHeaders();
+
             res.writeHead(proxyRes.statusCode, proxyRes.headers);
             proxyRes.pipe(res, { end: true });
         });
 
         proxyReq.on('error', (e) => {
             console.error(`Proxy error for ${reqUrl.pathname}:`, e.message);
+            setCorsHeaders(); // Ensure CORS headers are set on error
             res.writeHead(502, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'Backend service unavailable', details: e.message }));
         });
@@ -613,8 +621,8 @@ const server = http.createServer((req, res) => {
     }
     // Fallback for other routes
     else {
-        res.writeHead(404, { 'Content-Type': 'text/plain' });
-        res.end('Not Found');
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Not Found' }));
     }
 });
 
