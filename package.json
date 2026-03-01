@@ -1,5 +1,5 @@
 {
-  "name": "adm-backend",
+  "name": "admi-backend",
   "version": "1.0.0",
   "description": "ADMI Backend Server",
   "main": "main.js",
@@ -17,4 +17,5 @@
     "axios": "^1.6.2"
   },
 "repository":"https://github.com/patsonmalisa-oss/admibckend",
+
 }
