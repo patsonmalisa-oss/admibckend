@@ -12,5 +12,8 @@
     "bcryptjs": "^2.4.3",
     "jsonwebtoken": "^8.5.1",
     "form-data": "^3.0.1"
-  }
+  },
+  {"repository":"https://github.com/patsonmalisa-oss/admibckend",
+  
+
 }
