@@ -29,7 +29,7 @@ COPY temp_uploads/ ./temp_uploads/
 EXPOSE 5001
 
 # Stage 2: Node.js Backend
-FROM node:18-alpine as node-backend
+FROM node:20-alpine as node-backend
 
 # Set working directory
 WORKDIR /app/node-backend
@@ -94,6 +94,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # We use main.js as the entry point for Node.js as it includes the full backend logic
 
 CMD ["sh", "-c", "python langextract_service.py & node main.js"]
+
 
 
 
