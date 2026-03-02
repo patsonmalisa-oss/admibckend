@@ -38,9 +38,26 @@ import concurrent.futures
 import threading
 from functools import partial
 
+import boto3
+from io import BytesIO
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
+
+# MinIO Client Initialization
+minio_client = boto3.client(
+    's3',
+    endpoint_url=os.environ.get("MINIO_URL", "http://minio:9000"),
+    aws_access_key_id="eyJhbGciOiJFUzM4NCIsInR5cCI6IkpXVCJ9.eyJhaWQiOjAsImNhcCI6MCwiaWF0IjoxLjc3MjQyMDk5NjA4NDQ4MDM4NmU5LCJpc3MiOiJzdWJuZXRAbWluLmlvIiwibGlkIjoiMzZlNzM5ZGYtMzc2Zi00YTJhLTg1ODItMDE1OTMxZDQ1ZjQxIiwib3JnIjoiIiwicGxhbiI6IkZSRUUiLCJzdWIiOiJwbXBhbmFzaGU0ODlAZ21haWwuY29tIiwidHJpYWwiOmZhbHNlfQ.eeQH9ElHIjqNRdFEo4sE6QLgLm2NG_A2LSKzj-UZPrd_-qSOLjW2sOYojnaYAYFcHt-M0JFtySFeQVDCTmu66DsBGYxQ82H7Ht9ePRcyqeYH9uvON2vob1yM7rMLJEws",
+    aws_secret_access_key=os.environ.get("MINIO_SECRET_KEY", "minioadmin"),
+    region_name='us-east-1'
+)
+
+def get_minio_file(bucket, key):
+    """Fetches object from MinIO and returns a BytesIO stream."""
+    obj = minio_client.get_object(Bucket=bucket, Key=key)
+    return BytesIO(obj['Body'].read')
 
 # PDF Processing
 try:
@@ -655,26 +672,25 @@ def process_with_analysis(file_path: str, analysis: PromptAnalysis) -> List[Dict
         
         # 3. Pattern Matching / Column Extraction
         
-        # Specific Logic for REFERENCES
+# Specific Logic for REFERENCES (Enhanced Lenience)
         if analysis.section_type == SectionType.REFERENCES or analysis.section_hint == "REFERENCES":
             ref_results = []
-            # Regex to capture: Author. Date. Title. Publisher.
-            # Matches: Chigumadzi, P. 2018. These Bones Will Rise Again. Johannesburg: Jacana.
-            # Also handles: Author (Date). Title.
-            ref_pattern = re.compile(r"^(.*?)\.?\s+(\d{4})\.\s+(.*?)\.\s+(.*?)$")
-            
+            # More lenient pattern: Captures Author, Year (flexible format), and Title
+            ref_pattern = re.compile(r"^(.*?)\.?\s+[\(\[]?(\d{4})[\)\]]?[\.\s]+(.*?)(?:\.\s+(.*))?$")
+
             for line in target_text.split('\n'):
                 line = line.strip()
-                if not line: continue
-                
+                if not line or len(line) < 10: continue
+
                 match = ref_pattern.search(line)
                 if match:
                     ref_results.append({
                         "Author": match.group(1).strip(),
                         "Date": match.group(2).strip(),
                         "Title": match.group(3).strip(),
-                        "Institution": match.group(4).strip()
+                        "Source_Info": match.group(4).strip() if match.group(4) else ""
                     })
+
             if ref_results:
                 if HAS_PANDAS:
                     analyst = PandasDataAnalyst(ref_results)
@@ -800,6 +816,35 @@ def process_document():
                 "error": "Service is shutting down"
             }), 503
 
+        s3_key = request.form.get('s3_key')
+
+        if s3_key:
+            try:
+                file_stream = get_minio_file("temp-documents", s3_key)
+                # Process the file stream
+                analyzer = PromptAnalyzer()
+                prompt = request.form.get('prompt', 'Extract all data')
+                analysis = analyzer.analyze(prompt)
+
+                # Process the file
+                extractions = process_with_analysis(file_stream, analysis)
+
+                return jsonify({
+                    "success": True,
+                    "extractions": extractions,
+                    "headers": analysis.columns if extractions else [],
+                    "metadata": {
+                        "prompt_analysis": {
+                            "type": analysis.extraction_type.value,
+                            "section": analysis.section_type.value if analysis.section_type else None,
+                            "keywords": analysis.keywords
+                        },
+                        "file": s3_key
+                    }
+                })
+            except Exception as e:
+                return jsonify({"success": False, "error": f"MinIO fetch error: {str(e)}"}), 500
+
         if 'file' not in request.files:
             return jsonify({"success": False, "error": "No file part"}), 400
 
@@ -818,10 +863,10 @@ def process_document():
                 # Analyze prompt
                 analyzer = PromptAnalyzer()
                 analysis = analyzer.analyze(prompt)
-                
+
                 # Process the file
                 extractions = process_with_analysis(filepath, analysis)
-                
+
                 return jsonify({
                     "success": True,
                     "extractions": extractions,
