@@ -20,9 +20,11 @@ pandas==2.2.0
 openpyxl==3.1.2
 xlrd==2.0.1
 
+# MinIO/Storage Management
+boto3==1.33.2
+
 # Multi-threading Support (built-in, no package needed)
 # concurrent.futures is part of Python standard library
 
 # Optional: Additional PDF backends
 # unstructured  # For complex layouts (requires additional system dependencies)
-
