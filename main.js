@@ -16,6 +16,19 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { S3Client } = require("@aws-sdk/client-s3");
+const { Upload } = require("@aws-sdk/lib-storage");
+
+// MinIO Configuration
+const s3Client = new S3Client({
+    endpoint: process.env.MINIO_ENDPOINT || "http://minio:9000",
+    region: "us-east-1",
+    credentials: {
+        accessKeyId: "eyJhbGciOiJFUzM4NCIsInR5cCI6IkpXVCJ9.eyJhaWQiOjAsImNhcCI6MCwiaWF0IjoxLjc3MjQyMDk5NjA4NDQ4MDM4NmU5LCJpc3MiOiJzdWJuZXRAbWluLmlvIiwibGlkIjoiMzZlNzM5ZGYtMzc2Zi00YTJhLTg1ODItMDE1OTMxZDQ1ZjQxIiwib3JnIjoiIiwicGxhbiI6IkZSRUUiLCJzdWIiOiJwbXBhbmFzaGU0ODlAZ21haWwuY29tIiwidHJpYWwiOmZhbHNlfQ.eeQH9ElHIjqNRdFEo4sE6QLgLm2NG_A2LSKzj-UZPrd_-qSOLjW2sOYojnaYAYFcHt-M0JFtySFeQVDCTmu66DsBGYxQ82H7Ht9ePRcyqeYH9uvON2vob1yM7rMLJEws",
+        secretAccessKey: process.env.MINIO_SECRET_KEY || "minioadmin"
+    },
+    forcePathStyle: true // Required for MinIO
+});
 
 // In-memory storage
 const users = {};
@@ -23,7 +36,7 @@ const surveys = [];
 const jobs = [];
 const chatHistories = {};
 const researchChatHistories = {}; // Separate history for the research assistant
-const sessionFiles = []; 
+const sessionFiles = [];
 
 // Environment Configuration
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-key-change-this-in-render';
@@ -40,6 +53,12 @@ if (!process.env.JWT_SECRET && process.env.NODE_ENV === 'production') {
 }
 if (!DEEPSEEK_API_KEY && process.env.NODE_ENV === 'production') {
     console.warn('WARNING: DEEPSEEK_API_KEY not set. DeepSeek features will not work.');
+}
+if (!process.env.MINIO_ENDPOINT && process.env.NODE_ENV === 'production') {
+    console.warn('WARNING: MINIO_ENDPOINT not set. Using default MinIO endpoint.');
+}
+if (!process.env.MINIO_SECRET_KEY && process.env.NODE_ENV === 'production') {
+    console.warn('WARNING: MINIO_SECRET_KEY not set. Using default MinIO secret key.');
 }
 
 const server = http.createServer((req, res) => {
@@ -88,49 +107,45 @@ const server = http.createServer((req, res) => {
 
     // --- Docs with Umbuzo Endpoints ---
 
-    // 1. Document Ingestion (/api/documents/ingest)
-    else if (reqUrl.pathname === '/api/documents/ingest' && req.method === 'POST') {
-        let bb;
-        try {
-            bb = busboy({ headers: req.headers });
-        } catch (err) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: 'Invalid upload request.' }));
-        }
-
-        const filePromises = [];
-
-        bb.on('file', (fieldname, file, filename, encoding, mimetype) => {
-            const chunks = [];
-            file.on('data', (chunk) => chunks.push(chunk));
-            file.on('end', () => {
-                let safeFilename = "unknown_file";
-                if (typeof filename === 'string') safeFilename = filename;
-                else if (typeof filename === 'object' && filename?.filename) safeFilename = filename.filename;
-                safeFilename = path.basename(safeFilename);
-
-                const buffer = Buffer.concat(chunks);
-                const fileData = {
-                    filename: safeFilename,
-                    mimetype: mimetype,
-                    content: buffer.toString('base64'),
-                    size: buffer.length
-                };
-                sessionFiles.push(fileData);
-                filePromises.push(fileData);
-            });
-        });
-
-        bb.on('finish', () => {
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ 
-                success: true, 
-                files: filePromises.map(f => ({ filename: f.filename, size: f.size, content: f.content })) 
-            }));
-        });
-
-        req.pipe(bb);
+// 1. Document Ingestion (/api/documents/ingest)
+else if (reqUrl.pathname === '/api/documents/ingest' && req.method === 'POST') {
+    let bb;
+    try {
+        bb = busboy({ headers: req.headers });
+    } catch (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'Invalid upload request.' }));
     }
+
+    bb.on('file', async (fieldname, file, info) => {
+        const { filename, mimeType } = info;
+        const uploadKey = `uploads/${Date.now()}-${filename}`;
+
+        try {
+            const parallelUpload = new Upload({
+                client: s3Client,
+                params: {
+                    Bucket: "temp-documents",
+                    Key: uploadKey,
+                    Body: file, // Streams the data directly to MinIO
+                    ContentType: mimeType,
+                },
+            });
+
+            await parallelUpload.done();
+            sessionFiles.push({ filename, s3Key: uploadKey });
+        } catch (err) {
+            console.error("MinIO Upload Error:", err);
+        }
+    });
+
+    bb.on('finish', () => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, message: "Streamed to MinIO" }));
+    });
+
+    req.pipe(bb);
+}
 
     // 2. Document Extraction (/api/documents/extract)
     else if (reqUrl.pathname === '/api/documents/extract' && req.method === 'POST') {
