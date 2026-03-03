@@ -38,26 +38,9 @@ import concurrent.futures
 import threading
 from functools import partial
 
-import boto3
-from io import BytesIO
-
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
-
-# MinIO Client Initialization
-minio_client = boto3.client(
-    's3',
-    endpoint_url=os.environ.get("MINIO_URL", "http://minio:9000"),
-    aws_access_key_id="eyJhbGciOiJFUzM4NCIsInR5cCI6IkpXVCJ9.eyJhaWQiOjAsImNhcCI6MCwiaWF0IjoxLjc3MjQyMDk5NjA4NDQ4MDM4NmU5LCJpc3MiOiJzdWJuZXRAbWluLmlvIiwibGlkIjoiMzZlNzM5ZGYtMzc2Zi00YTJhLTg1ODItMDE1OTMxZDQ1ZjQxIiwib3JnIjoiIiwicGxhbiI6IkZSRUUiLCJzdWIiOiJwbXBhbmFzaGU0ODlAZ21haWwuY29tIiwidHJpYWwiOmZhbHNlfQ.eeQH9ElHIjqNRdFEo4sE6QLgLm2NG_A2LSKzj-UZPrd_-qSOLjW2sOYojnaYAYFcHt-M0JFtySFeQVDCTmu66DsBGYxQ82H7Ht9ePRcyqeYH9uvON2vob1yM7rMLJEws",
-    aws_secret_access_key=os.environ.get("MINIO_SECRET_KEY", "minioadmin"),
-    region_name='us-east-1'
-)
-
-def get_minio_file(bucket, key):
-    """Fetches object from MinIO and returns a BytesIO stream."""
-    obj = minio_client.get_object(Bucket=bucket, Key=key)
-    return BytesIO(obj['Body'].read')
 
 # PDF Processing
 try:
@@ -672,16 +655,16 @@ def process_with_analysis(file_path: str, analysis: PromptAnalysis) -> List[Dict
         
         # 3. Pattern Matching / Column Extraction
         
-# Specific Logic for REFERENCES (Enhanced Lenience)
+        # Specific Logic for REFERENCES (Enhanced Lenience)
         if analysis.section_type == SectionType.REFERENCES or analysis.section_hint == "REFERENCES":
             ref_results = []
             # More lenient pattern: Captures Author, Year (flexible format), and Title
             ref_pattern = re.compile(r"^(.*?)\.?\s+[\(\[]?(\d{4})[\)\]]?[\.\s]+(.*?)(?:\.\s+(.*))?$")
-
+            
             for line in target_text.split('\n'):
                 line = line.strip()
                 if not line or len(line) < 10: continue
-
+                
                 match = ref_pattern.search(line)
                 if match:
                     ref_results.append({
@@ -690,7 +673,7 @@ def process_with_analysis(file_path: str, analysis: PromptAnalysis) -> List[Dict
                         "Title": match.group(3).strip(),
                         "Source_Info": match.group(4).strip() if match.group(4) else ""
                     })
-
+            
             if ref_results:
                 if HAS_PANDAS:
                     analyst = PandasDataAnalyst(ref_results)
@@ -711,23 +694,22 @@ def process_with_analysis(file_path: str, analysis: PromptAnalysis) -> List[Dict
                 results.append({"Date": date})
             return results
             
-        # 4. Key-Value Extraction (Column: Value)
+        # 4. Key-Value Extraction (Column: Value) - Lower Threshold
         if analysis.columns and analysis.columns != ['Item', 'Description', 'Value']:
-            # Try to find "Column: Value" patterns
             extracted_rows = []
             current_row = {}
             
             lines = target_text.split('\n')
             for line in lines:
                 for col in analysis.columns:
-                    # Regex for "Column: Value" or "Column - Value"
-                    pattern = re.compile(f'(?i){re.escape(col)}\s*[:=-]\s*(.*)')
+                    # More flexible separator support (: = - —)
+                    pattern = re.compile(f'(?i){re.escape(col)}\s*[:=\-—]\s*(.*)')
                     match = pattern.search(line)
                     if match:
                         current_row[col] = match.group(1).strip()
                 
-                # Heuristic: if we have enough data, push row
-                if len(current_row) >= min(len(analysis.columns), 2):
+                # CHANGED: Allow rows with even a single column match
+                if len(current_row) >= 1:
                     extracted_rows.append(current_row)
                     current_row = {}
             
@@ -816,35 +798,6 @@ def process_document():
                 "error": "Service is shutting down"
             }), 503
 
-        s3_key = request.form.get('s3_key')
-
-        if s3_key:
-            try:
-                file_stream = get_minio_file("temp-documents", s3_key)
-                # Process the file stream
-                analyzer = PromptAnalyzer()
-                prompt = request.form.get('prompt', 'Extract all data')
-                analysis = analyzer.analyze(prompt)
-
-                # Process the file
-                extractions = process_with_analysis(file_stream, analysis)
-
-                return jsonify({
-                    "success": True,
-                    "extractions": extractions,
-                    "headers": analysis.columns if extractions else [],
-                    "metadata": {
-                        "prompt_analysis": {
-                            "type": analysis.extraction_type.value,
-                            "section": analysis.section_type.value if analysis.section_type else None,
-                            "keywords": analysis.keywords
-                        },
-                        "file": s3_key
-                    }
-                })
-            except Exception as e:
-                return jsonify({"success": False, "error": f"MinIO fetch error: {str(e)}"}), 500
-
         if 'file' not in request.files:
             return jsonify({"success": False, "error": "No file part"}), 400
 
@@ -863,7 +816,7 @@ def process_document():
                 # Analyze prompt
                 analyzer = PromptAnalyzer()
                 analysis = analyzer.analyze(prompt)
-
+                
                 # Process the file
                 extractions = process_with_analysis(filepath, analysis)
 
